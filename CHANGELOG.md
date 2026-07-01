@@ -1,5 +1,8 @@
 # Changelog
 
+## 3.2.2
+- Updated the optional legal-page query-string rate limiting rule to use a 10-second period so it can install on Cloudflare zones that are not entitled to 60-second rate limiting periods.
+
 ## 3.2.1
 - Replaced regex-based WordPress hardening expressions with regex-free Cloudflare expressions so WAF rules can install on zones that do not have access to the `matches` operator.
 - Preserved existing Cloudflare WAF/rate limiting rule priority ahead of plugin-managed hardening rules when updating hardening rulesets.
