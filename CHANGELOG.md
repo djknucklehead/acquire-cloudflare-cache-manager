@@ -1,5 +1,8 @@
 # Changelog
 
+## 3.1.1
+- Fixed Cloudflare cache rule creation by using an API-valid 2xx status code TTL range instead of a single-code range with equal endpoints.
+
 ## 3.1.0
 - Added recommended Cloudflare Cache Rules setup for each configured Zone ID.
 - Added subsite and Network Admin actions to create or update the `Cache Everything [Template]` and `BYPASS` cache rules while preserving other Cloudflare cache rules.
