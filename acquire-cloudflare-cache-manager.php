@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with optional per-site purging, update-triggered full-zone purges, recommended cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.2.0
+ * Version:     3.2.1
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.2.0';
+    const VERSION       = '3.2.1';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -700,7 +700,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             }
         }
 
-        $merged = $recommended_rules;
+        $merged = array();
 
         foreach ( $existing_rules as $rule ) {
             if ( ! is_array( $rule ) ) {
@@ -713,6 +713,10 @@ final class Acquire_Cloudflare_Cache_Manager {
             }
 
             $merged[] = self::prepare_ruleset_rule_for_update( $rule );
+        }
+
+        foreach ( $recommended_rules as $rule ) {
+            $merged[] = $rule;
         }
 
         return $merged;
@@ -785,11 +789,10 @@ final class Acquire_Cloudflare_Cache_Manager {
 
     public static function recommended_wordpress_probe_rule() {
         $conditions = array(
-            'http.request.uri.path matches "(?i)^/(?!index\\.php|wp-login\\.php|wp-cron\\.php|xmlrpc\\.php|wp-comments-post\\.php|wp-signup\\.php|wp-activate\\.php)[a-z0-9_.-]{1,40}\\.php[0-9]{0,2}$"',
-            'http.request.uri.path matches "(?i)^/wp-(content|includes)/.+\\.php[0-9]{0,2}$"',
-            'http.request.uri.path matches "(?i)^/wp-admin/(a|alfa|wp|classwithtostring)\\.php$"',
-            'http.request.uri.path matches "(?i)^/wp-admin/(js|maint)/index\\.php$"',
-            'http.request.uri.path matches "(?i)^/(old|new|wp|wordpress|backup)(/|$)"',
+            self::root_php_probe_expression(),
+            self::wp_core_php_probe_expression(),
+            self::fake_wp_admin_probe_expression(),
+            self::old_install_probe_expression(),
         );
 
         return array(
@@ -837,11 +840,85 @@ final class Acquire_Cloudflare_Cache_Manager {
     }
 
     public static function legal_page_query_expression() {
-        return 'not cf.client.bot and http.request.uri.query ne "" and lower(http.request.uri.path) in {"/privacy-policy" "/privacy-policy/" "/terms-and-conditions" "/terms-and-conditions/"}';
+        return 'not cf.client.bot and http.request.uri.query ne "" and ' . self::legal_page_path_expression();
     }
 
     public static function verified_bot_guarded_expression( $expression ) {
         return "not cf.client.bot and (\n    " . str_replace( "\n", "\n    ", trim( (string) $expression ) ) . "\n)";
+    }
+
+    public static function root_php_probe_expression() {
+        $allowed_paths = array(
+            '/index.php',
+            '/wp-login.php',
+            '/wp-cron.php',
+            '/xmlrpc.php',
+            '/wp-comments-post.php',
+            '/wp-signup.php',
+            '/wp-activate.php',
+        );
+
+        $guards = array(
+            self::php_like_path_expression( 'http.request.uri.path' ),
+            'not starts_with(lower(http.request.uri.path), "/wp-admin/")',
+            'not starts_with(lower(http.request.uri.path), "/wp-content/")',
+            'not starts_with(lower(http.request.uri.path), "/wp-includes/")',
+        );
+
+        foreach ( $allowed_paths as $path ) {
+            $guards[] = 'lower(http.request.uri.path) ne "' . $path . '"';
+        }
+
+        return "(\n    " . implode( "\n    and ", $guards ) . "\n)";
+    }
+
+    public static function wp_core_php_probe_expression() {
+        return "(\n    (starts_with(lower(http.request.uri.path), \"/wp-content/\") or starts_with(lower(http.request.uri.path), \"/wp-includes/\"))\n    and " . self::php_like_path_expression( 'http.request.uri.path' ) . "\n)";
+    }
+
+    public static function fake_wp_admin_probe_expression() {
+        $paths = array(
+            '/wp-admin/a.php',
+            '/wp-admin/alfa.php',
+            '/wp-admin/wp.php',
+            '/wp-admin/classwithtostring.php',
+            '/wp-admin/js/index.php',
+            '/wp-admin/maint/index.php',
+        );
+
+        $conditions = array();
+        foreach ( $paths as $path ) {
+            $conditions[] = 'lower(http.request.uri.path) eq "' . $path . '"';
+        }
+
+        return "(\n    " . implode( "\n    or ", $conditions ) . "\n)";
+    }
+
+    public static function old_install_probe_expression() {
+        $paths = array( 'old', 'new', 'wp', 'wordpress', 'backup' );
+        $conditions = array();
+
+        foreach ( $paths as $path ) {
+            $conditions[] = 'lower(http.request.uri.path) eq "/' . $path . '"';
+            $conditions[] = 'starts_with(lower(http.request.uri.path), "/' . $path . '/")';
+        }
+
+        return "(\n    " . implode( "\n    or ", $conditions ) . "\n)";
+    }
+
+    public static function php_like_path_expression( $path_expression ) {
+        return 'lower(' . $path_expression . ') contains ".php"';
+    }
+
+    public static function legal_page_path_expression() {
+        $conditions = array(
+            'lower(http.request.uri.path) eq "/privacy-policy"',
+            'lower(http.request.uri.path) eq "/privacy-policy/"',
+            'lower(http.request.uri.path) eq "/terms-and-conditions"',
+            'lower(http.request.uri.path) eq "/terms-and-conditions/"',
+        );
+
+        return "(\n    " . implode( "\n    or ", $conditions ) . "\n)";
     }
 
     public static function prepare_ruleset_rule_for_update( array $rule ) {

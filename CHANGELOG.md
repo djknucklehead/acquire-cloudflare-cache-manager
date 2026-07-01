@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.2.1
+- Replaced regex-based WordPress hardening expressions with regex-free Cloudflare expressions so WAF rules can install on zones that do not have access to the `matches` operator.
+- Preserved existing Cloudflare WAF/rate limiting rule priority ahead of plugin-managed hardening rules when updating hardening rulesets.
+
 ## 3.2.0
 - Added optional Cloudflare hardening rule setup from the site settings screen and Network Admin.
 - Added selected WAF custom rules for WordPress exploit probes, XML-RPC, and query-string requests to legal pages while preserving existing Cloudflare rules.
