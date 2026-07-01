@@ -1,5 +1,8 @@
 # Changelog
 
+## 3.1.2
+- Added a fallback for Cloudflare zones that are not entitled to custom cache key overrides; recommended cache rules now install without the ignore-query-string cache key override when Cloudflare blocks that setting.
+
 ## 3.1.1
 - Fixed Cloudflare cache rule creation by using an API-valid 2xx status code TTL range instead of a single-code range with equal endpoints.
 

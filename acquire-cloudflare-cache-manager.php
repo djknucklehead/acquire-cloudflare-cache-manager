@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with optional per-site purging, update-triggered full-zone purges, recommended cache rule setup, and GitHub release update checks.
- * Version:     3.1.1
+ * Version:     3.1.2
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.1.1';
+    const VERSION       = '3.1.2';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -329,7 +329,22 @@ final class Acquire_Cloudflare_Cache_Manager {
             );
         }
 
-        $rules = self::recommended_cache_rules();
+        $rules  = self::recommended_cache_rules( true );
+        $result = self::upsert_recommended_cache_rules( $zone_id, $rules );
+
+        if ( ! empty( $result['success'] ) || ! self::is_custom_cache_key_entitlement_error( $result ) ) {
+            return $result;
+        }
+
+        $fallback_result = self::upsert_recommended_cache_rules( $zone_id, self::recommended_cache_rules( false ) );
+        if ( ! empty( $fallback_result['success'] ) ) {
+            $fallback_result['message'] = 'OK. Installed without the custom cache key override because Cloudflare does not entitle this zone to that setting.';
+        }
+
+        return $fallback_result;
+    }
+
+    public static function upsert_recommended_cache_rules( $zone_id, array $rules ) {
         $entry = self::cloudflare_request(
             'GET',
             $zone_id,
@@ -376,53 +391,63 @@ final class Acquire_Cloudflare_Cache_Manager {
         return self::cloudflare_request( 'PUT', $zone_id, $path, $payload, 30 );
     }
 
-    public static function recommended_cache_rules() {
+    public static function is_custom_cache_key_entitlement_error( array $result ) {
+        $message = isset( $result['message'] ) ? (string) $result['message'] : '';
+        return false !== stripos( $message, 'custom cache key' ) || false !== stripos( $message, 'custom_key' );
+    }
+
+    public static function recommended_cache_rules( $include_custom_cache_key = true ) {
         return array(
-            self::recommended_cache_everything_rule(),
+            self::recommended_cache_everything_rule( $include_custom_cache_key ),
             self::recommended_bypass_rule(),
         );
     }
 
-    public static function recommended_cache_everything_rule() {
+    public static function recommended_cache_everything_rule( $include_custom_cache_key = true ) {
+        $action_parameters = array(
+            'cache'                     => true,
+            'edge_ttl'                  => array(
+                'mode'            => 'override_origin',
+                'default'         => 604800,
+                'status_code_ttl' => array(
+                    array(
+                        'status_code_range' => array(
+                            'to' => 299,
+                        ),
+                        'value'             => 86400,
+                    ),
+                    array(
+                        'status_code_range' => array(
+                            'from' => 300,
+                        ),
+                        'value'             => 0,
+                    ),
+                ),
+            ),
+            'cache_reserve'             => array(
+                'eligible' => false,
+            ),
+            'origin_error_page_passthru' => true,
+        );
+
+        if ( $include_custom_cache_key ) {
+            $action_parameters['cache_key'] = array(
+                'cache_deception_armor'     => false,
+                'ignore_query_strings_order' => false,
+                'custom_key'                => array(
+                    'query_string' => array(
+                        'exclude' => array( '*' ),
+                    ),
+                ),
+            );
+        }
+
         return array(
             'description'       => self::CACHE_EVERYTHING_RULE_NAME,
             'expression'        => 'true',
             'action'            => 'set_cache_settings',
             'enabled'           => true,
-            'action_parameters' => array(
-                'cache'                     => true,
-                'edge_ttl'                  => array(
-                    'mode'            => 'override_origin',
-                    'default'         => 604800,
-                    'status_code_ttl' => array(
-                        array(
-                            'status_code_range' => array(
-                                'to' => 299,
-                            ),
-                            'value'             => 86400,
-                        ),
-                        array(
-                            'status_code_range' => array(
-                                'from' => 300,
-                            ),
-                            'value'             => 0,
-                        ),
-                    ),
-                ),
-                'cache_key'                 => array(
-                    'cache_deception_armor'     => false,
-                    'ignore_query_strings_order' => false,
-                    'custom_key'                => array(
-                        'query_string' => array(
-                            'exclude' => array( '*' ),
-                        ),
-                    ),
-                ),
-                'cache_reserve'             => array(
-                    'eligible' => false,
-                ),
-                'origin_error_page_passthru' => true,
-            ),
+            'action_parameters' => $action_parameters,
         );
     }
 
@@ -1355,6 +1380,10 @@ final class Acquire_Cloudflare_Cache_Manager {
             $args['acfcm_error'] = self::short_notice_message( $result['message'] );
         }
 
+        if ( ! empty( $result['success'] ) && ! empty( $result['message'] ) && 'OK' !== $result['message'] ) {
+            $args['acfcm_info'] = self::short_notice_message( $result['message'] );
+        }
+
         return $args;
     }
 
@@ -1366,6 +1395,10 @@ final class Acquire_Cloudflare_Cache_Manager {
 
         if ( ! $success && ! empty( $result['message'] ) ) {
             $message .= ' Cloudflare said: ' . self::short_notice_message( $result['message'] );
+        }
+
+        if ( $success && ! empty( $result['message'] ) && 'OK' !== $result['message'] ) {
+            $message .= ' ' . self::short_notice_message( $result['message'] );
         }
 
         echo '<div class="notice ' . esc_attr( $success ? 'notice-success' : 'notice-error' ) . ' is-dismissible"><p>' . esc_html( $message ) . '</p></div>';
@@ -1413,7 +1446,11 @@ final class Acquire_Cloudflare_Cache_Manager {
             'log_cleared'    => 'Cloudflare purge log cleared.',
         );
         if ( isset( $messages[ $notice ] ) ) {
-            echo '<div class="notice notice-success is-dismissible"><p>' . esc_html( $messages[ $notice ] ) . '</p></div>';
+            $message = $messages[ $notice ];
+            if ( 'cache_rules' === $notice && ! empty( $_GET['acfcm_info'] ) ) {
+                $message .= ' ' . self::short_notice_message( wp_unslash( $_GET['acfcm_info'] ) );
+            }
+            echo '<div class="notice notice-success is-dismissible"><p>' . esc_html( $message ) . '</p></div>';
         }
 
         if ( 'cache_rules_failed' === $notice ) {

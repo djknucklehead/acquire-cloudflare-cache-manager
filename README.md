@@ -41,7 +41,7 @@ For purge-only use, the token can be limited to cache purge access. To use the r
 2. Update the version number in the plugin header and `const VERSION` when you make changes.
 3. Zip the plugin folder so the zip contains this root folder:
    `acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php`
-4. Create a GitHub Release with a tag such as `v3.1.1`.
+4. Create a GitHub Release with a tag such as `v3.1.2`.
 5. Attach the zip file as a release asset.
 6. WordPress will detect the release as an available plugin update where the GitHub repo is configured or baked into the plugin.
 
@@ -70,10 +70,10 @@ After saving a Zone ID for a standalone site or multisite subsite, use **Save & 
 
 The plugin creates or updates these two cache rules in Cloudflare's cache settings phase:
 
-- `Cache Everything [Template]`: makes requests eligible for cache, ignores query strings in the cache key, sets a 7-day default edge TTL, caches 200 responses for 1 day, and avoids caching 300+ responses.
+- `Cache Everything [Template]`: makes requests eligible for cache, tries to ignore query strings in the cache key, sets a 7-day default edge TTL, caches 2xx responses for 1 day, and avoids caching 300+ responses.
 - `BYPASS`: runs after the cache-everything rule and bypasses cache for WordPress admin/login/API/preview/logged-in requests while leaving static assets cacheable.
 
-Other existing Cloudflare cache rules are preserved.
+Other existing Cloudflare cache rules are preserved. If Cloudflare reports that a zone is not entitled to custom cache key overrides, the installer retries without the ignore-query-string cache key setting.
 
 
 ## Automatic GitHub release packaging
@@ -85,9 +85,9 @@ Future release flow:
 1. Update the version in the plugin header and `const VERSION`.
 2. Update `CHANGELOG.md`.
 3. Commit and push to `main`.
-4. On GitHub.com, create a new release using a tag like `v3.1.1`.
+4. On GitHub.com, create a new release using a tag like `v3.1.2`.
 5. Publish the release without manually attaching a zip.
-6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.1.1.zip` and attach it to the release automatically.
+6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.1.2.zip` and attach it to the release automatically.
 
 The workflow validates that the release tag matches the plugin version before uploading the zip.
 
