@@ -60,3 +60,23 @@ On a standalone WordPress install, the plugin uses **Settings → Cloudflare Cac
 - Recent purge log.
 
 On multisite, those global/update settings remain under **Network Admin → Settings → Cloudflare Cache Manager**.
+
+
+## Automatic GitHub release packaging
+
+This repository includes a GitHub Actions workflow at `.github/workflows/package-release.yml`.
+
+Future release flow:
+
+1. Update the version in the plugin header and `const VERSION`.
+2. Update `CHANGELOG.md`.
+3. Commit and push to `main`.
+4. On GitHub.com, create a new release using a tag like `v3.0.3`.
+5. Publish the release without manually attaching a zip.
+6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.0.3.zip` and attach it to the release automatically.
+
+The workflow validates that the release tag matches the plugin version before uploading the zip.
+
+## Plugin icon
+
+The updater sends `assets/icon.svg` as the plugin icon for WordPress update/details screens. Replace that SVG with your preferred icon artwork and commit it to the repo.

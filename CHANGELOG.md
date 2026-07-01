@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.3
+- Added GitHub Actions release packaging workflow.
+- Added plugin icon metadata support for GitHub-hosted update details.
+- Added `assets/icon.svg` as the default plugin icon source.
+
 ## 3.0.2
 - Improved standalone WordPress UI.
 - Added standalone settings for update-triggered purges, external cache hook purges, GitHub update source, and purge log.

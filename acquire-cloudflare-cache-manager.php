@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with optional per-site purging, update-triggered full-zone purges, and GitHub release update checks.
- * Version:     3.0.2
+ * Version:     3.0.3
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.0.2';
+    const VERSION       = '3.0.3';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -199,6 +199,33 @@ final class Acquire_Cloudflare_Cache_Manager {
 
         // Baked-in default for this plugin's update source.
         return self::DEFAULT_GITHUB_REPO;
+    }
+
+    public static function github_asset_url( $path, $ref = 'main' ) {
+        $repo = self::github_repo();
+        if ( ! preg_match( '#^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$#', $repo, $matches ) ) {
+            return '';
+        }
+
+        $owner = rawurlencode( $matches[1] );
+        $name  = rawurlencode( $matches[2] );
+        $ref   = rawurlencode( $ref ? $ref : 'main' );
+        $path  = ltrim( (string) $path, '/' );
+        $parts = array_map( 'rawurlencode', explode( '/', $path ) );
+
+        return 'https://raw.githubusercontent.com/' . $owner . '/' . $name . '/' . $ref . '/' . implode( '/', $parts );
+    }
+
+    public static function github_plugin_icons() {
+        $icon_svg = self::github_asset_url( 'assets/icon.svg' );
+        if ( ! $icon_svg ) {
+            return array();
+        }
+
+        return array(
+            'svg'     => esc_url_raw( $icon_svg ),
+            'default' => esc_url_raw( $icon_svg ),
+        );
     }
 
     public static function github_token() {
@@ -1263,6 +1290,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             'package'     => $package,
             'tested'      => get_bloginfo( 'version' ),
             'requires'    => '5.9',
+            'icons'       => self::github_plugin_icons(),
         );
 
         $transient->response[ self::BASENAME ] = $obj;
@@ -1291,6 +1319,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             'requires'      => '5.9',
             'tested'        => get_bloginfo( 'version' ),
             'download_link' => self::github_package_url( $release ),
+            'icons'         => self::github_plugin_icons(),
             'sections'      => array(
                 'description' => '<p>Network-activated multisite Cloudflare cache manager.</p>',
                 'changelog'   => $body,
