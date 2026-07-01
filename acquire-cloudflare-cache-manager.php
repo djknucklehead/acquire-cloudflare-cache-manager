@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with optional per-site purging, update-triggered full-zone purges, recommended cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.2.2
+ * Version:     3.2.3
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.2.2';
+    const VERSION       = '3.2.3';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -575,15 +575,8 @@ final class Acquire_Cloudflare_Cache_Manager {
             );
         }
 
-        $rate_limit_rules = self::recommended_hardening_rate_limit_rules( $options );
-        if ( ! empty( $rate_limit_rules ) ) {
-            $results['Rate limiting rules'] = self::upsert_hardening_ruleset(
-                $zone_id,
-                self::RATE_LIMIT_RULE_PHASE,
-                'Cloudflare Rate Limiting Rules',
-                'Rate limiting rules managed by Acquire Cloudflare Cache Manager.',
-                $rate_limit_rules
-            );
+        if ( ! empty( $options['legal_query_rate_limit'] ) ) {
+            $results['Rate limiting rules'] = self::install_hardening_rate_limit_rules( $zone_id, $options );
         }
 
         return self::combine_hardening_results( $results );
@@ -616,11 +609,15 @@ final class Acquire_Cloudflare_Cache_Manager {
         $ok = 0;
         $failed = 0;
         $messages = array();
+        $fallback_used = false;
 
         foreach ( $zones as $zone_id => $zone_data ) {
             $result = self::install_recommended_hardening_rules( $zone_id, $options );
             if ( ! empty( $result['success'] ) ) {
                 $ok++;
+                if ( ! empty( $result['message'] ) && false !== stripos( (string) $result['message'], 'path-only rate limiting fallback' ) ) {
+                    $fallback_used = true;
+                }
                 continue;
             }
 
@@ -631,6 +628,9 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
 
         $message = sprintf( '%d zone(s) updated, %d failed.', $ok, $failed );
+        if ( $fallback_used ) {
+            $message .= ' Rate limiting used the path-only fallback on at least one zone because Cloudflare does not entitle that zone to inspect query strings in rate limiting rules.';
+        }
         if ( ! empty( $messages ) ) {
             $message .= ' ' . implode( ' ', array_slice( $messages, 0, 3 ) );
         }
@@ -690,6 +690,40 @@ final class Acquire_Cloudflare_Cache_Manager {
         $path = $ruleset_id ? 'rulesets/' . rawurlencode( $ruleset_id ) : 'rulesets/phases/' . $phase . '/entrypoint';
 
         return self::cloudflare_request( 'PUT', $zone_id, $path, $payload, 30 );
+    }
+
+    public static function install_hardening_rate_limit_rules( $zone_id, array $options ) {
+        $result = self::upsert_hardening_ruleset(
+            $zone_id,
+            self::RATE_LIMIT_RULE_PHASE,
+            'Cloudflare Rate Limiting Rules',
+            'Rate limiting rules managed by Acquire Cloudflare Cache Manager.',
+            self::recommended_hardening_rate_limit_rules( $options, true )
+        );
+
+        if ( ! empty( $result['success'] ) || ! self::is_rate_limit_query_field_entitlement_error( $result ) ) {
+            return $result;
+        }
+
+        $fallback_result = self::upsert_hardening_ruleset(
+            $zone_id,
+            self::RATE_LIMIT_RULE_PHASE,
+            'Cloudflare Rate Limiting Rules',
+            'Rate limiting rules managed by Acquire Cloudflare Cache Manager.',
+            self::recommended_hardening_rate_limit_rules( $options, false )
+        );
+
+        if ( ! empty( $fallback_result['success'] ) ) {
+            $fallback_result['message'] = 'OK. Used the path-only rate limiting fallback because Cloudflare does not entitle this zone to inspect query strings in rate limiting rules.';
+        }
+
+        return $fallback_result;
+    }
+
+    public static function is_rate_limit_query_field_entitlement_error( array $result ) {
+        $message = isset( $result['message'] ) ? (string) $result['message'] : '';
+        return false !== stripos( $message, 'http.request.uri.query' )
+            && ( false !== stripos( $message, 'not entitled' ) || false !== stripos( $message, 'Advanced Rate Limiting' ) );
     }
 
     public static function merge_hardening_rules( array $existing_rules, array $recommended_rules ) {
@@ -777,13 +811,13 @@ final class Acquire_Cloudflare_Cache_Manager {
         return $rules;
     }
 
-    public static function recommended_hardening_rate_limit_rules( array $options ) {
+    public static function recommended_hardening_rate_limit_rules( array $options, $require_query_string = true ) {
         if ( empty( $options['legal_query_rate_limit'] ) ) {
             return array();
         }
 
         return array(
-            self::recommended_legal_query_rate_limit_rule(),
+            self::recommended_legal_query_rate_limit_rule( $require_query_string ),
         );
     }
 
@@ -821,8 +855,8 @@ final class Acquire_Cloudflare_Cache_Manager {
         );
     }
 
-    public static function recommended_legal_query_rate_limit_rule() {
-        $expression = self::legal_page_query_expression();
+    public static function recommended_legal_query_rate_limit_rule( $require_query_string = true ) {
+        $expression = self::legal_page_rate_limit_expression( $require_query_string );
 
         return array(
             'description' => self::HARDENING_LEGAL_QUERY_RATE_LIMIT_RULE_NAME,
@@ -841,6 +875,20 @@ final class Acquire_Cloudflare_Cache_Manager {
 
     public static function legal_page_query_expression() {
         return 'not cf.client.bot and http.request.uri.query ne "" and ' . self::legal_page_path_expression();
+    }
+
+    public static function legal_page_rate_limit_expression( $require_query_string = true ) {
+        $conditions = array(
+            'not cf.client.bot',
+        );
+
+        if ( $require_query_string ) {
+            $conditions[] = 'http.request.uri.query ne ""';
+        }
+
+        $conditions[] = self::legal_page_path_expression();
+
+        return implode( ' and ', $conditions );
     }
 
     public static function verified_bot_guarded_expression( $expression ) {

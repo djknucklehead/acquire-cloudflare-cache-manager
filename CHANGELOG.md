@@ -1,5 +1,8 @@
 # Changelog
 
+## 3.2.3
+- Added a fallback for Cloudflare zones that are not entitled to use `http.request.uri.query` in rate limiting rules; the optional legal-page rate limit now retries with a path-only expression while leaving the query-specific WAF challenge rule intact.
+
 ## 3.2.2
 - Updated the optional legal-page query-string rate limiting rule to use a 10-second period so it can install on Cloudflare zones that are not entitled to 60-second rate limiting periods.
 
