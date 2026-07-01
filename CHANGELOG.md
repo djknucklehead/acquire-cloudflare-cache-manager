@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.2.0
+- Added optional Cloudflare hardening rule setup from the site settings screen and Network Admin.
+- Added selected WAF custom rules for WordPress exploit probes, XML-RPC, and query-string requests to legal pages while preserving existing Cloudflare rules.
+- Added optional Cloudflare rate limiting rule setup for repeated query-string traffic to legal pages.
+
 ## 3.1.2
 - Added a fallback for Cloudflare zones that are not entitled to custom cache key overrides; recommended cache rules now install without the ignore-query-string cache key override when Cloudflare blocks that setting.
 

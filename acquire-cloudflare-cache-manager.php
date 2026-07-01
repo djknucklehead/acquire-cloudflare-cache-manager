@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
- * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with optional per-site purging, update-triggered full-zone purges, recommended cache rule setup, and GitHub release update checks.
- * Version:     3.1.2
+ * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with optional per-site purging, update-triggered full-zone purges, recommended cache and hardening rule setup, and GitHub release update checks.
+ * Version:     3.2.0
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.1.2';
+    const VERSION       = '3.2.0';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -27,8 +27,14 @@ final class Acquire_Cloudflare_Cache_Manager {
     const MODE_ENABLED  = 'enabled';
     const MODE_DISABLED = 'disabled';
     const CACHE_RULE_PHASE = 'http_request_cache_settings';
+    const WAF_CUSTOM_RULE_PHASE = 'http_request_firewall_custom';
+    const RATE_LIMIT_RULE_PHASE = 'http_ratelimit';
     const CACHE_EVERYTHING_RULE_NAME = 'Cache Everything [Template]';
     const BYPASS_RULE_NAME = 'BYPASS';
+    const HARDENING_WP_PROBES_RULE_NAME = 'ACFCM - Block WordPress exploit probes';
+    const HARDENING_XMLRPC_RULE_NAME = 'ACFCM - Block XML-RPC';
+    const HARDENING_LEGAL_QUERY_CHALLENGE_RULE_NAME = 'ACFCM - Challenge legal-page query strings';
+    const HARDENING_LEGAL_QUERY_RATE_LIMIT_RULE_NAME = 'ACFCM - Rate limit legal-page query strings';
 
     /** @var array|null */
     private static $release_cache = null;
@@ -51,6 +57,8 @@ final class Acquire_Cloudflare_Cache_Manager {
         add_action( 'admin_post_acfcm_purge_network_site', array( __CLASS__, 'handle_purge_network_site' ) );
         add_action( 'admin_post_acfcm_install_cache_rules', array( __CLASS__, 'handle_install_cache_rules' ) );
         add_action( 'admin_post_acfcm_install_network_site_cache_rules', array( __CLASS__, 'handle_install_network_site_cache_rules' ) );
+        add_action( 'admin_post_acfcm_install_hardening_rules', array( __CLASS__, 'handle_install_hardening_rules' ) );
+        add_action( 'admin_post_acfcm_install_network_hardening_rules', array( __CLASS__, 'handle_install_network_hardening_rules' ) );
         add_action( 'admin_post_acfcm_clear_log', array( __CLASS__, 'handle_clear_log' ) );
         add_action( 'admin_notices', array( __CLASS__, 'admin_notices' ) );
         add_action( 'network_admin_notices', array( __CLASS__, 'admin_notices' ) );
@@ -511,6 +519,329 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
 
         return $merged;
+    }
+
+    public static function hardening_options_from_request( array $request ) {
+        return array(
+            'wordpress_probes'       => ! empty( $request['acfcm_hardening_wordpress_probes'] ),
+            'xmlrpc'                 => ! empty( $request['acfcm_hardening_xmlrpc'] ),
+            'legal_query_challenge'  => ! empty( $request['acfcm_hardening_legal_query_challenge'] ),
+            'legal_query_rate_limit' => ! empty( $request['acfcm_hardening_legal_query_rate_limit'] ),
+        );
+    }
+
+    public static function has_selected_hardening_options( array $options ) {
+        foreach ( $options as $enabled ) {
+            if ( ! empty( $enabled ) ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static function install_recommended_hardening_rules( $zone_id, array $options ) {
+        $zone_id = trim( (string) $zone_id );
+        if ( empty( $zone_id ) ) {
+            return array(
+                'success' => false,
+                'code'    => 0,
+                'message' => 'Missing Cloudflare Zone ID.',
+                'body'    => '',
+                'json'    => null,
+                'result'  => null,
+            );
+        }
+
+        if ( ! self::has_selected_hardening_options( $options ) ) {
+            return array(
+                'success' => false,
+                'code'    => 0,
+                'message' => 'Select at least one hardening rule to install or update.',
+                'body'    => '',
+                'json'    => null,
+                'result'  => null,
+            );
+        }
+
+        $results = array();
+        $waf_rules = self::recommended_hardening_waf_rules( $options );
+        if ( ! empty( $waf_rules ) ) {
+            $results['WAF custom rules'] = self::upsert_hardening_ruleset(
+                $zone_id,
+                self::WAF_CUSTOM_RULE_PHASE,
+                'Cloudflare WAF Custom Rules',
+                'WAF custom rules managed by Acquire Cloudflare Cache Manager.',
+                $waf_rules
+            );
+        }
+
+        $rate_limit_rules = self::recommended_hardening_rate_limit_rules( $options );
+        if ( ! empty( $rate_limit_rules ) ) {
+            $results['Rate limiting rules'] = self::upsert_hardening_ruleset(
+                $zone_id,
+                self::RATE_LIMIT_RULE_PHASE,
+                'Cloudflare Rate Limiting Rules',
+                'Rate limiting rules managed by Acquire Cloudflare Cache Manager.',
+                $rate_limit_rules
+            );
+        }
+
+        return self::combine_hardening_results( $results );
+    }
+
+    public static function install_recommended_hardening_rules_for_enabled_zones( array $options ) {
+        if ( ! self::has_selected_hardening_options( $options ) ) {
+            return array(
+                'success' => false,
+                'code'    => 0,
+                'message' => 'Select at least one hardening rule to install or update.',
+                'body'    => '',
+                'json'    => null,
+                'result'  => null,
+            );
+        }
+
+        $zones = self::get_enabled_zones();
+        if ( empty( $zones ) ) {
+            return array(
+                'success' => false,
+                'code'    => 0,
+                'message' => 'No enabled Cloudflare zones found.',
+                'body'    => '',
+                'json'    => null,
+                'result'  => null,
+            );
+        }
+
+        $ok = 0;
+        $failed = 0;
+        $messages = array();
+
+        foreach ( $zones as $zone_id => $zone_data ) {
+            $result = self::install_recommended_hardening_rules( $zone_id, $options );
+            if ( ! empty( $result['success'] ) ) {
+                $ok++;
+                continue;
+            }
+
+            $failed++;
+            if ( ! empty( $result['message'] ) ) {
+                $messages[] = $zone_id . ': ' . $result['message'];
+            }
+        }
+
+        $message = sprintf( '%d zone(s) updated, %d failed.', $ok, $failed );
+        if ( ! empty( $messages ) ) {
+            $message .= ' ' . implode( ' ', array_slice( $messages, 0, 3 ) );
+        }
+
+        return array(
+            'success' => ( 0 === $failed && $ok > 0 ),
+            'code'    => 0,
+            'message' => $message,
+            'body'    => '',
+            'json'    => null,
+            'result'  => null,
+        );
+    }
+
+    public static function upsert_hardening_ruleset( $zone_id, $phase, $ruleset_name, $ruleset_description, array $rules ) {
+        $entry = self::cloudflare_request(
+            'GET',
+            $zone_id,
+            'rulesets/phases/' . $phase . '/entrypoint',
+            null,
+            20
+        );
+
+        if ( ! $entry['success'] ) {
+            if ( 404 === (int) $entry['code'] ) {
+                return self::cloudflare_request(
+                    'POST',
+                    $zone_id,
+                    'rulesets',
+                    array(
+                        'kind'        => 'zone',
+                        'name'        => $ruleset_name,
+                        'phase'       => $phase,
+                        'description' => $ruleset_description,
+                        'rules'       => $rules,
+                    ),
+                    30
+                );
+            }
+
+            return $entry;
+        }
+
+        $ruleset = is_array( $entry['result'] ) ? $entry['result'] : array();
+        $ruleset_id = isset( $ruleset['id'] ) ? (string) $ruleset['id'] : '';
+        $existing_rules = isset( $ruleset['rules'] ) && is_array( $ruleset['rules'] ) ? $ruleset['rules'] : array();
+        $merged_rules = self::merge_hardening_rules( $existing_rules, $rules );
+
+        $payload = array(
+            'kind'        => isset( $ruleset['kind'] ) ? (string) $ruleset['kind'] : 'zone',
+            'name'        => isset( $ruleset['name'] ) ? (string) $ruleset['name'] : $ruleset_name,
+            'phase'       => $phase,
+            'description' => isset( $ruleset['description'] ) ? (string) $ruleset['description'] : $ruleset_description,
+            'rules'       => $merged_rules,
+        );
+
+        $path = $ruleset_id ? 'rulesets/' . rawurlencode( $ruleset_id ) : 'rulesets/phases/' . $phase . '/entrypoint';
+
+        return self::cloudflare_request( 'PUT', $zone_id, $path, $payload, 30 );
+    }
+
+    public static function merge_hardening_rules( array $existing_rules, array $recommended_rules ) {
+        $managed_names = array();
+        foreach ( $recommended_rules as $rule ) {
+            if ( is_array( $rule ) && ! empty( $rule['description'] ) ) {
+                $managed_names[] = (string) $rule['description'];
+            }
+        }
+
+        $merged = $recommended_rules;
+
+        foreach ( $existing_rules as $rule ) {
+            if ( ! is_array( $rule ) ) {
+                continue;
+            }
+
+            $description = isset( $rule['description'] ) ? (string) $rule['description'] : '';
+            if ( in_array( $description, $managed_names, true ) ) {
+                continue;
+            }
+
+            $merged[] = self::prepare_ruleset_rule_for_update( $rule );
+        }
+
+        return $merged;
+    }
+
+    public static function combine_hardening_results( array $results ) {
+        if ( empty( $results ) ) {
+            return array(
+                'success' => false,
+                'code'    => 0,
+                'message' => 'No hardening rules were selected.',
+                'body'    => '',
+                'json'    => null,
+                'result'  => null,
+            );
+        }
+
+        $success = true;
+        $messages = array();
+
+        foreach ( $results as $label => $result ) {
+            if ( empty( $result['success'] ) ) {
+                $success = false;
+                $messages[] = $label . ': ' . ( ! empty( $result['message'] ) ? $result['message'] : 'Cloudflare request failed.' );
+                continue;
+            }
+
+            if ( ! empty( $result['message'] ) && 'OK' !== $result['message'] ) {
+                $messages[] = $label . ': ' . $result['message'];
+            }
+        }
+
+        return array(
+            'success' => $success,
+            'code'    => 0,
+            'message' => empty( $messages ) ? 'OK' : implode( ' ', $messages ),
+            'body'    => '',
+            'json'    => null,
+            'result'  => null,
+        );
+    }
+
+    public static function recommended_hardening_waf_rules( array $options ) {
+        $rules = array();
+
+        if ( ! empty( $options['wordpress_probes'] ) ) {
+            $rules[] = self::recommended_wordpress_probe_rule();
+        }
+
+        if ( ! empty( $options['xmlrpc'] ) ) {
+            $rules[] = self::recommended_xmlrpc_block_rule();
+        }
+
+        if ( ! empty( $options['legal_query_challenge'] ) ) {
+            $rules[] = self::recommended_legal_query_challenge_rule();
+        }
+
+        return $rules;
+    }
+
+    public static function recommended_hardening_rate_limit_rules( array $options ) {
+        if ( empty( $options['legal_query_rate_limit'] ) ) {
+            return array();
+        }
+
+        return array(
+            self::recommended_legal_query_rate_limit_rule(),
+        );
+    }
+
+    public static function recommended_wordpress_probe_rule() {
+        $conditions = array(
+            'http.request.uri.path matches "(?i)^/(?!index\\.php|wp-login\\.php|wp-cron\\.php|xmlrpc\\.php|wp-comments-post\\.php|wp-signup\\.php|wp-activate\\.php)[a-z0-9_.-]{1,40}\\.php[0-9]{0,2}$"',
+            'http.request.uri.path matches "(?i)^/wp-(content|includes)/.+\\.php[0-9]{0,2}$"',
+            'http.request.uri.path matches "(?i)^/wp-admin/(a|alfa|wp|classwithtostring)\\.php$"',
+            'http.request.uri.path matches "(?i)^/wp-admin/(js|maint)/index\\.php$"',
+            'http.request.uri.path matches "(?i)^/(old|new|wp|wordpress|backup)(/|$)"',
+        );
+
+        return array(
+            'description' => self::HARDENING_WP_PROBES_RULE_NAME,
+            'expression'  => self::verified_bot_guarded_expression( "(\n    " . implode( "\n    or ", $conditions ) . "\n)" ),
+            'action'      => 'block',
+            'enabled'     => true,
+        );
+    }
+
+    public static function recommended_xmlrpc_block_rule() {
+        return array(
+            'description' => self::HARDENING_XMLRPC_RULE_NAME,
+            'expression'  => self::verified_bot_guarded_expression( 'http.request.uri.path eq "/xmlrpc.php"' ),
+            'action'      => 'block',
+            'enabled'     => true,
+        );
+    }
+
+    public static function recommended_legal_query_challenge_rule() {
+        return array(
+            'description' => self::HARDENING_LEGAL_QUERY_CHALLENGE_RULE_NAME,
+            'expression'  => self::legal_page_query_expression(),
+            'action'      => 'managed_challenge',
+            'enabled'     => true,
+        );
+    }
+
+    public static function recommended_legal_query_rate_limit_rule() {
+        $expression = self::legal_page_query_expression();
+
+        return array(
+            'description' => self::HARDENING_LEGAL_QUERY_RATE_LIMIT_RULE_NAME,
+            'expression'  => $expression,
+            'action'      => 'managed_challenge',
+            'enabled'     => true,
+            'ratelimit'   => array(
+                'characteristics'      => array( 'cf.colo.id', 'ip.src' ),
+                'period'               => 60,
+                'requests_per_period'  => 20,
+                'mitigation_timeout'   => 600,
+                'counting_expression'  => $expression,
+            ),
+        );
+    }
+
+    public static function legal_page_query_expression() {
+        return 'not cf.client.bot and http.request.uri.query ne "" and lower(http.request.uri.path) in {"/privacy-policy" "/privacy-policy/" "/terms-and-conditions" "/terms-and-conditions/"}';
+    }
+
+    public static function verified_bot_guarded_expression( $expression ) {
+        return "not cf.client.bot and (\n    " . str_replace( "\n", "\n    ", trim( (string) $expression ) ) . "\n)";
     }
 
     public static function prepare_ruleset_rule_for_update( array $rule ) {
@@ -1026,6 +1357,27 @@ final class Acquire_Cloudflare_Cache_Manager {
             </p>
 
             <hr>
+            <h2>Cloudflare Hardening Rules</h2>
+            <p>Creates or updates selected Cloudflare WAF and rate limiting rules for the current site’s Zone ID. Existing Cloudflare rules are preserved.</p>
+            <p class="description">The Cloudflare API token needs WAF edit permission. The high-rate query-string option also needs rate limiting rules support for the zone.</p>
+            <p class="description">Query-string protections target only <code>/privacy-policy/</code> and <code>/terms-and-conditions/</code>.</p>
+            <?php if ( $zone_id ) : ?>
+                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                    <input type="hidden" name="action" value="acfcm_install_hardening_rules">
+                    <?php wp_nonce_field( 'acfcm_install_hardening_rules' ); ?>
+                    <fieldset>
+                        <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_wordpress_probes" value="1"> Block WordPress exploit probes</label>
+                        <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_xmlrpc" value="1"> Block XML-RPC</label>
+                        <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_legal_query_challenge" value="1"> Protect static/legal pages from query-string cache busting</label>
+                        <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_legal_query_rate_limit" value="1"> Challenge high-rate query-string traffic</label>
+                    </fieldset>
+                    <p><?php submit_button( 'Install/Update Hardening Rules', 'secondary', 'acfcm_install_hardening_rules_submit', false, array( 'onclick' => "return confirm('Install or update the selected Cloudflare hardening rules for this zone?');" ) ); ?></p>
+                </form>
+            <?php else : ?>
+                <p>Save a Cloudflare Zone ID before installing hardening rules.</p>
+            <?php endif; ?>
+
+            <hr>
             <h2>Purge Actions</h2>
             <p>These buttons use the current site’s Zone ID.</p>
             <p>
@@ -1190,6 +1542,23 @@ final class Acquire_Cloudflare_Cache_Manager {
             <p>
                 <a class="button button-primary" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_purge_network_everything' ), 'acfcm_purge_network_everything' ) ); ?>" onclick="return confirm('Purge EVERYTHING for every enabled Cloudflare zone on this network?');">Purge All Enabled Zones</a>
             </p>
+
+            <hr>
+            <h2>Cloudflare Hardening Rules</h2>
+            <p>Install or update selected WAF and rate limiting rules for every enabled Cloudflare zone on this network. Existing Cloudflare rules are preserved.</p>
+            <p class="description">The Cloudflare API token needs WAF edit permission. The high-rate query-string option also needs rate limiting rules support for the zone.</p>
+            <p class="description">Query-string protections target only <code>/privacy-policy/</code> and <code>/terms-and-conditions/</code>.</p>
+            <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                <input type="hidden" name="action" value="acfcm_install_network_hardening_rules">
+                <?php wp_nonce_field( 'acfcm_install_network_hardening_rules' ); ?>
+                <fieldset>
+                    <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_wordpress_probes" value="1"> Block WordPress exploit probes</label>
+                    <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_xmlrpc" value="1"> Block XML-RPC</label>
+                    <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_legal_query_challenge" value="1"> Protect static/legal pages from query-string cache busting</label>
+                    <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_legal_query_rate_limit" value="1"> Challenge high-rate query-string traffic</label>
+                </fieldset>
+                <p><?php submit_button( 'Install/Update Hardening Rules', 'secondary', 'acfcm_install_network_hardening_rules_submit', false, array( 'onclick' => "return confirm('Install or update the selected Cloudflare hardening rules for every enabled zone?');" ) ); ?></p>
+            </form>
 
             <hr>
             <h2>Subsites</h2>
@@ -1371,9 +1740,52 @@ final class Acquire_Cloudflare_Cache_Manager {
         exit;
     }
 
+    public static function handle_install_hardening_rules() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Insufficient permissions.' );
+        }
+        check_admin_referer( 'acfcm_install_hardening_rules' );
+
+        $request = wp_unslash( $_POST );
+        $result = self::install_recommended_hardening_rules( self::get_zone_id(), self::hardening_options_from_request( $request ) );
+        $redirect = wp_get_referer() ?: admin_url( 'options-general.php?page=acfcm-cloudflare-cache' );
+
+        wp_safe_redirect( add_query_arg( self::hardening_rules_redirect_args( $result ), $redirect ) );
+        exit;
+    }
+
+    public static function handle_install_network_hardening_rules() {
+        if ( ! current_user_can( 'manage_network_options' ) ) {
+            wp_die( 'Insufficient permissions.' );
+        }
+        check_admin_referer( 'acfcm_install_network_hardening_rules' );
+
+        $request = wp_unslash( $_POST );
+        $result = self::install_recommended_hardening_rules_for_enabled_zones( self::hardening_options_from_request( $request ) );
+
+        wp_safe_redirect( add_query_arg( self::hardening_rules_redirect_args( $result ), network_admin_url( 'settings.php?page=acfcm-network' ) ) );
+        exit;
+    }
+
     public static function cache_rules_redirect_args( array $result ) {
         $args = array(
             'acfcm_notice' => ! empty( $result['success'] ) ? 'cache_rules' : 'cache_rules_failed',
+        );
+
+        if ( empty( $result['success'] ) && ! empty( $result['message'] ) ) {
+            $args['acfcm_error'] = self::short_notice_message( $result['message'] );
+        }
+
+        if ( ! empty( $result['success'] ) && ! empty( $result['message'] ) && 'OK' !== $result['message'] ) {
+            $args['acfcm_info'] = self::short_notice_message( $result['message'] );
+        }
+
+        return $args;
+    }
+
+    public static function hardening_rules_redirect_args( array $result ) {
+        $args = array(
+            'acfcm_notice' => ! empty( $result['success'] ) ? 'hardening_rules' : 'hardening_rules_failed',
         );
 
         if ( empty( $result['success'] ) && ! empty( $result['message'] ) ) {
@@ -1443,11 +1855,15 @@ final class Acquire_Cloudflare_Cache_Manager {
             'network_locked' => 'A network purge is already running or just completed. Try again shortly if needed.',
             'network_site'   => 'Cloudflare purge everything requested for that site zone.',
             'cache_rules'    => 'Cloudflare recommended cache rules installed or updated.',
+            'hardening_rules' => 'Cloudflare hardening rules installed or updated.',
             'log_cleared'    => 'Cloudflare purge log cleared.',
         );
         if ( isset( $messages[ $notice ] ) ) {
             $message = $messages[ $notice ];
             if ( 'cache_rules' === $notice && ! empty( $_GET['acfcm_info'] ) ) {
+                $message .= ' ' . self::short_notice_message( wp_unslash( $_GET['acfcm_info'] ) );
+            }
+            if ( 'hardening_rules' === $notice && ! empty( $_GET['acfcm_info'] ) ) {
                 $message .= ' ' . self::short_notice_message( wp_unslash( $_GET['acfcm_info'] ) );
             }
             echo '<div class="notice notice-success is-dismissible"><p>' . esc_html( $message ) . '</p></div>';
@@ -1457,6 +1873,14 @@ final class Acquire_Cloudflare_Cache_Manager {
             $message = 'Cloudflare recommended cache rules could not be installed or updated.';
             if ( ! empty( $_GET['acfcm_error'] ) ) {
                 $message .= ' Cloudflare said: ' . self::short_notice_message( wp_unslash( $_GET['acfcm_error'] ) );
+            }
+            echo '<div class="notice notice-error is-dismissible"><p>' . esc_html( $message ) . '</p></div>';
+        }
+
+        if ( 'hardening_rules_failed' === $notice ) {
+            $message = 'Cloudflare hardening rules could not be installed or updated.';
+            if ( ! empty( $_GET['acfcm_error'] ) ) {
+                $message .= ' Details: ' . self::short_notice_message( wp_unslash( $_GET['acfcm_error'] ) );
             }
             echo '<div class="notice notice-error is-dismissible"><p>' . esc_html( $message ) . '</p></div>';
         }

@@ -11,6 +11,7 @@ Cloudflare cache purging plugin for standalone WordPress sites and WordPress mul
 - Adds subsite toolbar purge options for enabled sites.
 - Automatically purges related URLs on public content updates.
 - Creates or updates the recommended Cloudflare `Cache Everything [Template]` and `BYPASS` cache rules for configured Zone IDs.
+- Creates or updates optional Cloudflare hardening rules for common WordPress exploit probes, XML-RPC, and query-string abuse on static/legal pages.
 - Purges all enabled Cloudflare zones after WordPress core/plugin/theme updates.
 - Includes manual purge controls in Network Admin on multisite and in Settings on standalone installs.
 - Includes GitHub release update checking.
@@ -33,7 +34,7 @@ define( 'ACFCM_GITHUB_TOKEN', 'YOUR_GITHUB_TOKEN' );
 
 The plugin is also backward-compatible with the older `CLOUDFLARE_API_TOKEN` constant.
 
-For purge-only use, the token can be limited to cache purge access. To use the recommended cache rule setup action, the token also needs Cloudflare's `Zone > Cache Rules > Edit`, `Account Rulesets > Edit`, and `Account Filter Lists > Edit` permissions for the relevant zone/account.
+For purge-only use, the token can be limited to cache purge access. To use the recommended cache rule setup action, the token also needs Cloudflare's `Zone > Cache Rules > Edit`, `Account Rulesets > Edit`, and `Account Filter Lists > Edit` permissions for the relevant zone/account. To use hardening rule setup, the token needs `Zone > WAF > Edit`; the high-rate query-string option may also require `Zone > Rate Limiting Rules > Edit` and plan support for rate limiting rules.
 
 ## GitHub release update workflow
 
@@ -41,7 +42,7 @@ For purge-only use, the token can be limited to cache purge access. To use the r
 2. Update the version number in the plugin header and `const VERSION` when you make changes.
 3. Zip the plugin folder so the zip contains this root folder:
    `acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php`
-4. Create a GitHub Release with a tag such as `v3.1.2`.
+4. Create a GitHub Release with a tag such as `v3.2.0`.
 5. Attach the zip file as a release asset.
 6. WordPress will detect the release as an available plugin update where the GitHub repo is configured or baked into the plugin.
 
@@ -76,6 +77,20 @@ The plugin creates or updates these two cache rules in Cloudflare's cache settin
 Other existing Cloudflare cache rules are preserved. If Cloudflare reports that a zone is not entitled to custom cache key overrides, the installer retries without the ignore-query-string cache key setting.
 
 
+## Optional Cloudflare hardening rules
+
+Use **Cloudflare Hardening Rules** on the site settings screen, or the Network Admin hardening section for multisite, to install selected Cloudflare-level protections.
+
+The plugin can create or update these deterministic Cloudflare rules:
+
+- `ACFCM - Block WordPress exploit probes`: blocks random root PHP probes, direct PHP execution probes under `/wp-content/` and `/wp-includes/`, fake `/wp-admin/` probe files, and old install-path probes.
+- `ACFCM - Block XML-RPC`: blocks direct requests to `/xmlrpc.php`.
+- `ACFCM - Challenge legal-page query strings`: uses a managed challenge for query-string requests to `/privacy-policy/` and `/terms-and-conditions/`.
+- `ACFCM - Rate limit legal-page query strings`: uses Cloudflare rate limiting to managed-challenge repeated query-string traffic to those same legal pages.
+
+The hardening installer preserves existing Cloudflare WAF and rate limiting rules. It replaces matching selected ACFCM-managed rules by description so the installer can be re-run safely. Verified bots are excluded with Cloudflare's `cf.client.bot` field.
+
+
 ## Automatic GitHub release packaging
 
 This repository includes a GitHub Actions workflow at `.github/workflows/package-release.yml`.
@@ -85,9 +100,9 @@ Future release flow:
 1. Update the version in the plugin header and `const VERSION`.
 2. Update `CHANGELOG.md`.
 3. Commit and push to `main`.
-4. On GitHub.com, create a new release using a tag like `v3.1.2`.
+4. On GitHub.com, create a new release using a tag like `v3.2.0`.
 5. Publish the release without manually attaching a zip.
-6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.1.2.zip` and attach it to the release automatically.
+6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.2.0.zip` and attach it to the release automatically.
 
 The workflow validates that the release tag matches the plugin version before uploading the zip.
 
