@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.1.0
+- Added recommended Cloudflare Cache Rules setup for each configured Zone ID.
+- Added subsite and Network Admin actions to create or update the `Cache Everything [Template]` and `BYPASS` cache rules while preserving other Cloudflare cache rules.
+- Kept common static, font, and video file extensions out of the bypass rule so those assets remain cacheable.
+- Documented the additional Cloudflare API token permissions needed for cache rule setup.
+
 ## 3.0.4
 - Updated the plugin update icon to the Acquire Digital logo.
 
