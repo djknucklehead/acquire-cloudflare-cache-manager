@@ -1,0 +1,45 @@
+name: Validate plugin
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: PHP and version checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Check PHP syntax
+        run: php -l acquire-cloudflare-cache-manager.php
+
+      - name: Check plugin version consistency
+        run: |
+          PLUGIN_VERSION="$(sed -nE 's/^[[:space:]]+\*[[:space:]]Version:[[:space:]]+([^[:space:]]+).*/\1/p' acquire-cloudflare-cache-manager.php | head -n 1)"
+          CONST_VERSION="$(sed -nE "s/^[[:space:]]*const VERSION[[:space:]]*=[[:space:]]*'([^']+)'.*/\1/p" acquire-cloudflare-cache-manager.php | head -n 1)"
+
+          if [ -z "$PLUGIN_VERSION" ]; then
+            echo "Could not read plugin header Version."
+            exit 1
+          fi
+
+          if [ -z "$CONST_VERSION" ]; then
+            echo "Could not read Acquire_Cloudflare_Cache_Manager::VERSION."
+            exit 1
+          fi
+
+          if [ "$PLUGIN_VERSION" != "$CONST_VERSION" ]; then
+            echo "Plugin header Version ($PLUGIN_VERSION) does not match const VERSION ($CONST_VERSION)."
+            exit 1
+          fi
+
+          echo "Plugin version is $PLUGIN_VERSION."
