@@ -1,5 +1,8 @@
 # Changelog
 
+## 3.0.4
+- Updated the plugin update icon to the Acquire Digital logo.
+
 ## 3.0.3
 - Added GitHub Actions release packaging workflow.
 - Added plugin icon metadata support for GitHub-hosted update details.
