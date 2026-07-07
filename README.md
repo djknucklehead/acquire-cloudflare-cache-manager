@@ -44,7 +44,7 @@ On multisite, when a shared network or `wp-config.php` Cloudflare API token is a
 2. Update the version number in the plugin header and `const VERSION` when you make changes.
 3. Zip the plugin folder so the zip contains this root folder:
    `acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php`
-4. Create a GitHub Release with a tag such as `v3.2.4`.
+4. Create a GitHub Release with a tag such as `v3.2.5`.
 5. Attach the zip file as a release asset.
 6. WordPress will detect the release as an available plugin update where the GitHub repo is configured or baked into the plugin.
 
@@ -69,7 +69,9 @@ On multisite, those global/update settings remain under **Network Admin → Sett
 
 ## Recommended Cloudflare cache rules
 
-After saving a Zone ID for a standalone site or multisite subsite, use **Save & Install Recommended Cache Rules** on the site settings screen, or **Install Rules** from the Network Admin subsite table.
+After saving a Zone ID for a standalone site or multisite subsite, use **Save & Install Recommended Cache Rules** on the site settings screen, or **Install Cache Rules** from the Network Admin subsite table.
+
+In Network Admin, each subsite row also includes **Install Cache + Basic Security**. That action installs the recommended cache rules and the basic WordPress exploit-probe Cloudflare WAF rule for that one subsite zone. XML-RPC blocking, legal-page query-string challenges, and legal-page rate limiting remain opt-in hardening choices because they are more likely to affect site integrations or plan-specific limits.
 
 The plugin creates or updates these two cache rules in Cloudflare's cache settings phase:
 
@@ -81,7 +83,7 @@ Other existing Cloudflare cache rules are preserved. If Cloudflare reports that 
 
 ## Optional Cloudflare hardening rules
 
-Use **Cloudflare Hardening Rules** on the site settings screen, or the Network Admin hardening section for multisite, to install selected Cloudflare-level protections.
+Use **Cloudflare Hardening Rules** on the site settings screen, or the Network-Wide Cloudflare Hardening Rules section in Network Admin, to install selected Cloudflare-level protections. In Network Admin, the hardening form applies to every enabled zone; use the subsite table actions for one-zone installs.
 
 The plugin can create or update these deterministic Cloudflare rules:
 
@@ -102,9 +104,9 @@ Future release flow:
 1. Update the version in the plugin header and `const VERSION`.
 2. Update `CHANGELOG.md`.
 3. Commit and push to `main`.
-4. On GitHub.com, create a new release using a tag like `v3.2.4`.
+4. On GitHub.com, create a new release using a tag like `v3.2.5`.
 5. Publish the release without manually attaching a zip.
-6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.2.4.zip` and attach it to the release automatically.
+6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.2.5.zip` and attach it to the release automatically.
 
 The workflow validates that the release tag matches the plugin version before uploading the zip.
 

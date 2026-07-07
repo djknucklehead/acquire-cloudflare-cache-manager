@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.2.5
+- Added a per-subsite Network Admin action to install cache rules together with the basic WordPress exploit-probe Cloudflare hardening rule.
+- Clarified that the Network Admin Cloudflare hardening form applies to every enabled zone.
+
 ## 3.2.4
 - Restricted multisite subsite Cloudflare mode/Zone ID edits and manual Cloudflare purge/rule actions to Network Admin users when a shared network or wp-config Cloudflare API token is active.
 
