@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with optional per-site purging, update-triggered full-zone purges, recommended cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.2.3
+ * Version:     3.2.4
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.2.3';
+    const VERSION       = '3.2.4';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -129,6 +129,41 @@ final class Acquire_Cloudflare_Cache_Manager {
             return 'current site option';
         }
         return 'not set';
+    }
+
+    public static function has_network_cf_api_token() {
+        if ( defined( 'ACFCM_CLOUDFLARE_API_TOKEN' ) && ACFCM_CLOUDFLARE_API_TOKEN ) {
+            return true;
+        }
+        if ( defined( 'CLOUDFLARE_API_TOKEN' ) && CLOUDFLARE_API_TOKEN ) {
+            return true;
+        }
+        return is_multisite() && (bool) get_site_option( 'acfcm_cloudflare_api_token', '' );
+    }
+
+    public static function is_subsite_cloudflare_management_locked() {
+        return is_multisite() && self::has_network_cf_api_token() && ! current_user_can( 'manage_network_options' );
+    }
+
+    public static function current_user_can_manage_site_cloudflare() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return false;
+        }
+        if ( is_multisite() && self::has_network_cf_api_token() && ! current_user_can( 'manage_network_options' ) ) {
+            return false;
+        }
+        return true;
+    }
+
+    public static function cloudflare_permission_error_result() {
+        return array(
+            'success' => false,
+            'code'    => 0,
+            'message' => 'Network Admin permission is required while this network is using a shared Cloudflare API token.',
+            'body'    => '',
+            'json'    => null,
+            'result'  => null,
+        );
     }
 
     public static function get_zone_id( $blog_id = 0 ) {
@@ -279,8 +314,10 @@ final class Acquire_Cloudflare_Cache_Manager {
             $args['body'] = wp_json_encode( $payload );
         }
 
+        $zone_id_path = rawurlencode( $zone_id );
+
         $response = wp_remote_request(
-            "https://api.cloudflare.com/client/v4/zones/{$zone_id}/{$path}",
+            "https://api.cloudflare.com/client/v4/zones/{$zone_id_path}/{$path}",
             $args
         );
 
@@ -1301,21 +1338,26 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
 
         $is_multisite = is_multisite();
+        $site_cloudflare_locked = self::is_subsite_cloudflare_management_locked();
+        $can_run_site_cloudflare_actions = self::current_user_can_manage_site_cloudflare();
 
         if ( isset( $_POST['acfcm_save_site_settings'] ) || isset( $_POST['acfcm_save_site_settings_and_rules'] ) ) {
             check_admin_referer( 'acfcm_save_site_settings' );
 
-            $mode = isset( $_POST['acfcm_cloudflare_mode'] ) ? sanitize_key( wp_unslash( $_POST['acfcm_cloudflare_mode'] ) ) : self::MODE_AUTO;
-            if ( ! in_array( $mode, array( self::MODE_AUTO, self::MODE_ENABLED, self::MODE_DISABLED ), true ) ) {
-                $mode = self::MODE_AUTO;
+            if ( ! $site_cloudflare_locked ) {
+                $mode = isset( $_POST['acfcm_cloudflare_mode'] ) ? sanitize_key( wp_unslash( $_POST['acfcm_cloudflare_mode'] ) ) : self::MODE_AUTO;
+                if ( ! in_array( $mode, array( self::MODE_AUTO, self::MODE_ENABLED, self::MODE_DISABLED ), true ) ) {
+                    $mode = self::MODE_AUTO;
+                }
+
+                update_option( 'acfcm_cloudflare_mode', $mode );
+                update_option( 'cloudflare_zone_id', sanitize_text_field( wp_unslash( $_POST['cloudflare_zone_id'] ?? '' ) ) );
             }
 
-            update_option( 'acfcm_cloudflare_mode', $mode );
-            update_option( 'cloudflare_zone_id', sanitize_text_field( wp_unslash( $_POST['cloudflare_zone_id'] ?? '' ) ) );
             update_option( 'acfcm_content_auto_purge', isset( $_POST['acfcm_content_auto_purge'] ) ? '1' : '0' );
             update_option( 'acfcm_logged_in_nocache', isset( $_POST['acfcm_logged_in_nocache'] ) ? '1' : '0' );
 
-            if ( ! defined( 'ACFCM_CLOUDFLARE_API_TOKEN' ) && ! defined( 'CLOUDFLARE_API_TOKEN' ) && ! get_site_option( 'acfcm_cloudflare_api_token', '' ) ) {
+            if ( ! $site_cloudflare_locked && ! defined( 'ACFCM_CLOUDFLARE_API_TOKEN' ) && ! defined( 'CLOUDFLARE_API_TOKEN' ) && ! get_site_option( 'acfcm_cloudflare_api_token', '' ) ) {
                 if ( isset( $_POST['cloudflare_api_token'] ) && '' !== $_POST['cloudflare_api_token'] ) {
                     update_option( 'cloudflare_api_token', sanitize_text_field( wp_unslash( $_POST['cloudflare_api_token'] ) ) );
                 }
@@ -1352,7 +1394,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             echo '<div class="notice notice-success is-dismissible"><p>Cloudflare cache settings saved.</p></div>';
 
             if ( isset( $_POST['acfcm_save_site_settings_and_rules'] ) ) {
-                self::render_cache_rules_result_notice( self::install_recommended_cache_rules( self::get_zone_id() ) );
+                self::render_cache_rules_result_notice( $can_run_site_cloudflare_actions ? self::install_recommended_cache_rules( self::get_zone_id() ) : self::cloudflare_permission_error_result() );
             }
         }
 
@@ -1365,12 +1407,16 @@ final class Acquire_Cloudflare_Cache_Manager {
         $github_repo_editable  = ! defined( 'ACFCM_GITHUB_REPO' );
         $github_token_editable = ! defined( 'ACFCM_GITHUB_TOKEN' );
         $log             = get_site_option( 'acfcm_purge_log', array() );
+        $save_rules_attrs = $can_run_site_cloudflare_actions ? array() : array( 'disabled' => 'disabled' );
         ?>
         <div class="wrap">
             <h1>Cloudflare Cache</h1>
 
             <?php if ( $is_multisite ) : ?>
                 <p>This subsite is currently <strong><?php echo $enabled ? 'enabled' : 'disabled'; ?></strong> for Cloudflare purge behavior.</p>
+                <?php if ( $site_cloudflare_locked ) : ?>
+                    <p class="description">Cloudflare mode, Zone ID, and manual Cloudflare actions are managed in Network Admin because this network is using a shared Cloudflare API token.</p>
+                <?php endif; ?>
             <?php else : ?>
                 <p>This standalone WordPress site is currently <strong><?php echo $enabled ? 'enabled' : 'disabled'; ?></strong> for Cloudflare purge behavior.</p>
             <?php endif; ?>
@@ -1383,17 +1429,22 @@ final class Acquire_Cloudflare_Cache_Manager {
                     <tr>
                         <th scope="row"><label for="acfcm_cloudflare_mode">Site Mode</label></th>
                         <td>
-                            <select name="acfcm_cloudflare_mode" id="acfcm_cloudflare_mode">
+                            <select name="acfcm_cloudflare_mode" id="acfcm_cloudflare_mode" <?php disabled( $site_cloudflare_locked ); ?>>
                                 <option value="auto" <?php selected( $mode, self::MODE_AUTO ); ?>>Auto — enable only if a Zone ID exists</option>
                                 <option value="enabled" <?php selected( $mode, self::MODE_ENABLED ); ?>>Enabled</option>
                                 <option value="disabled" <?php selected( $mode, self::MODE_DISABLED ); ?>>Disabled</option>
                             </select>
-                            <p class="description">Auto mode preserves older installs: if this site already has a saved Zone ID, purge features automatically engage.</p>
+                            <p class="description"><?php echo $site_cloudflare_locked ? 'Network Admin controls this while a shared Cloudflare API token is active.' : 'Auto mode preserves older installs: if this site already has a saved Zone ID, purge features automatically engage.'; ?></p>
                         </td>
                     </tr>
                     <tr>
                         <th scope="row"><label for="cloudflare_zone_id">Cloudflare Zone ID</label></th>
-                        <td><input type="text" name="cloudflare_zone_id" id="cloudflare_zone_id" class="regular-text" value="<?php echo esc_attr( $zone_id ); ?>"></td>
+                        <td>
+                            <input <?php disabled( $site_cloudflare_locked ); ?> type="text" name="cloudflare_zone_id" id="cloudflare_zone_id" class="regular-text" value="<?php echo esc_attr( $zone_id ); ?>">
+                            <?php if ( $site_cloudflare_locked ) : ?>
+                                <p class="description">Ask a Network Admin to change this Zone ID from the network settings screen.</p>
+                            <?php endif; ?>
+                        </td>
                     </tr>
                     <tr>
                         <th scope="row">Automatic Content Purge</th>
@@ -1465,7 +1516,7 @@ final class Acquire_Cloudflare_Cache_Manager {
 
                 <p class="submit">
                     <?php submit_button( 'Save Settings', 'primary', 'acfcm_save_site_settings', false ); ?>
-                    <?php submit_button( 'Save & Install Recommended Cache Rules', 'secondary', 'acfcm_save_site_settings_and_rules', false ); ?>
+                    <?php submit_button( 'Save & Install Recommended Cache Rules', 'secondary', 'acfcm_save_site_settings_and_rules', false, $save_rules_attrs ); ?>
                 </p>
             </form>
 
@@ -1474,7 +1525,9 @@ final class Acquire_Cloudflare_Cache_Manager {
             <p>Creates or updates the <code><?php echo esc_html( self::CACHE_EVERYTHING_RULE_NAME ); ?></code> and <code><?php echo esc_html( self::BYPASS_RULE_NAME ); ?></code> rules for the current site’s Zone ID. Existing Cloudflare cache rules with other names are preserved.</p>
             <p class="description">The Cloudflare API token needs Cache Rules and Rulesets edit permissions for this action.</p>
             <p>
-                <?php if ( $zone_id ) : ?>
+                <?php if ( ! $can_run_site_cloudflare_actions ) : ?>
+                    Network Admin permission is required to install Cloudflare rules while a shared Cloudflare API token is active.
+                <?php elseif ( $zone_id ) : ?>
                     <a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_install_cache_rules' ), 'acfcm_install_cache_rules' ) ); ?>" onclick="return confirm('Install or update the recommended Cloudflare cache rules for this zone?');">Install/Update Recommended Cache Rules</a>
                 <?php else : ?>
                     Save a Cloudflare Zone ID before installing recommended cache rules.
@@ -1486,7 +1539,9 @@ final class Acquire_Cloudflare_Cache_Manager {
             <p>Creates or updates selected Cloudflare WAF and rate limiting rules for the current site’s Zone ID. Existing Cloudflare rules are preserved.</p>
             <p class="description">The Cloudflare API token needs WAF edit permission. The high-rate query-string option also needs rate limiting rules support for the zone.</p>
             <p class="description">Query-string protections target only <code>/privacy-policy/</code> and <code>/terms-and-conditions/</code>.</p>
-            <?php if ( $zone_id ) : ?>
+            <?php if ( ! $can_run_site_cloudflare_actions ) : ?>
+                <p>Network Admin permission is required to install Cloudflare hardening rules while a shared Cloudflare API token is active.</p>
+            <?php elseif ( $zone_id ) : ?>
                 <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
                     <input type="hidden" name="action" value="acfcm_install_hardening_rules">
                     <?php wp_nonce_field( 'acfcm_install_hardening_rules' ); ?>
@@ -1506,8 +1561,12 @@ final class Acquire_Cloudflare_Cache_Manager {
             <h2>Purge Actions</h2>
             <p>These buttons use the current site’s Zone ID.</p>
             <p>
-                <a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_purge_home' ), 'acfcm_purge_home' ) ); ?>">Purge Homepage</a>
-                <a class="button button-secondary" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_purge_site_everything' ), 'acfcm_purge_site_everything' ) ); ?>" onclick="return confirm('Purge EVERYTHING for this Cloudflare zone?');">Purge Everything</a>
+                <?php if ( ! $can_run_site_cloudflare_actions ) : ?>
+                    Network Admin permission is required to run manual Cloudflare purges while a shared Cloudflare API token is active.
+                <?php else : ?>
+                    <a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_purge_home' ), 'acfcm_purge_home' ) ); ?>">Purge Homepage</a>
+                    <a class="button button-secondary" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_purge_site_everything' ), 'acfcm_purge_site_everything' ) ); ?>" onclick="return confirm('Purge EVERYTHING for this Cloudflare zone?');">Purge Everything</a>
+                <?php endif; ?>
             </p>
 
             <?php if ( ! $is_multisite ) : ?>
@@ -1756,7 +1815,7 @@ final class Acquire_Cloudflare_Cache_Manager {
      * ---------------------------------------------------------------------- */
 
     public static function register_toolbar_menu( $wp_admin_bar ) {
-        if ( ! is_admin_bar_showing() || ! current_user_can( 'manage_options' ) || ! self::is_site_enabled() ) {
+        if ( ! is_admin_bar_showing() || ! self::current_user_can_manage_site_cloudflare() || ! self::is_site_enabled() ) {
             return;
         }
 
@@ -1782,7 +1841,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     }
 
     public static function handle_purge_home() {
-        if ( ! current_user_can( 'manage_options' ) ) {
+        if ( ! self::current_user_can_manage_site_cloudflare() ) {
             wp_die( 'Insufficient permissions.' );
         }
         check_admin_referer( 'acfcm_purge_home' );
@@ -1797,7 +1856,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     }
 
     public static function handle_purge_site_everything() {
-        if ( ! current_user_can( 'manage_options' ) ) {
+        if ( ! self::current_user_can_manage_site_cloudflare() ) {
             wp_die( 'Insufficient permissions.' );
         }
         check_admin_referer( 'acfcm_purge_site_everything' );
@@ -1839,7 +1898,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     }
 
     public static function handle_install_cache_rules() {
-        if ( ! current_user_can( 'manage_options' ) ) {
+        if ( ! self::current_user_can_manage_site_cloudflare() ) {
             wp_die( 'Insufficient permissions.' );
         }
         check_admin_referer( 'acfcm_install_cache_rules' );
@@ -1866,7 +1925,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     }
 
     public static function handle_install_hardening_rules() {
-        if ( ! current_user_can( 'manage_options' ) ) {
+        if ( ! self::current_user_can_manage_site_cloudflare() ) {
             wp_die( 'Insufficient permissions.' );
         }
         check_admin_referer( 'acfcm_install_hardening_rules' );

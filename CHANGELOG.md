@@ -1,5 +1,8 @@
 # Changelog
 
+## 3.2.4
+- Restricted multisite subsite Cloudflare mode/Zone ID edits and manual Cloudflare purge/rule actions to Network Admin users when a shared network or wp-config Cloudflare API token is active.
+
 ## 3.2.3
 - Added a fallback for Cloudflare zones that are not entitled to use `http.request.uri.query` in rate limiting rules; the optional legal-page rate limit now retries with a path-only expression while leaving the query-specific WAF challenge rule intact.
 
