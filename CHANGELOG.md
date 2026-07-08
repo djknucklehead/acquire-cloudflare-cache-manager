@@ -1,5 +1,8 @@
 # Changelog
 
+## 3.2.6
+- Allowed multisite subsite admins to run manual purge actions for their own site when a shared network or `wp-config.php` Cloudflare API token is active, while keeping plugin settings and Cloudflare rule management restricted to Network Admin.
+
 ## 3.2.5
 - Added a per-subsite Network Admin action to install cache rules together with the basic WordPress exploit-probe Cloudflare hardening rule.
 - Clarified that the Network Admin Cloudflare hardening form applies to every enabled zone.
