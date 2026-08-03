@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.3.0
+- Added opt-in Cloudflare Cache Reserve eligibility for standalone sites and individual multisite subsites.
+- Added hostname-specific managed Cache Reserve rules so one domain can use Cache Reserve even when multiple sites share a Cloudflare zone.
+- Kept Cache Reserve eligibility rules ahead of the WordPress bypass rule so admin, login, API, preview, and logged-in traffic remain uncacheable.
+- Rebuilds all plugin-managed Cache Reserve hostname rules for a zone when recommended cache rules are installed, removing stale hostname rules while preserving unrelated Cloudflare rules.
+
 ## 3.2.6
 - Allowed multisite subsite admins to run manual purge actions for their own site when a shared network or `wp-config.php` Cloudflare API token is active, while keeping plugin settings and Cloudflare rule management restricted to Network Admin.
 

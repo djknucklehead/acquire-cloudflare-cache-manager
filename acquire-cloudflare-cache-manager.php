@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
- * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with optional per-site purging, update-triggered full-zone purges, recommended cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.2.6
+ * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with per-site purging, optional Cache Reserve eligibility, cache and hardening rule setup, and GitHub release update checks.
+ * Version:     3.3.0
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.2.6';
+    const VERSION       = '3.3.0';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -30,6 +30,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     const WAF_CUSTOM_RULE_PHASE = 'http_request_firewall_custom';
     const RATE_LIMIT_RULE_PHASE = 'http_ratelimit';
     const CACHE_EVERYTHING_RULE_NAME = 'Cache Everything [Template]';
+    const CACHE_RESERVE_RULE_PREFIX = 'ACFCM - Cache Reserve: ';
     const BYPASS_RULE_NAME = 'BYPASS';
     const HARDENING_WP_PROBES_RULE_NAME = 'ACFCM - Block WordPress exploit probes';
     const HARDENING_XMLRPC_RULE_NAME = 'ACFCM - Block XML-RPC';
@@ -217,6 +218,29 @@ final class Acquire_Cloudflare_Cache_Manager {
         return '0' !== (string) get_option( 'acfcm_content_auto_purge', '1' );
     }
 
+    public static function is_cache_reserve_enabled( $blog_id = 0 ) {
+        if ( $blog_id && is_multisite() && (int) get_current_blog_id() !== (int) $blog_id ) {
+            switch_to_blog( $blog_id );
+            $enabled = get_option( 'acfcm_cache_reserve_enabled', '0' );
+            restore_current_blog();
+        } else {
+            $enabled = get_option( 'acfcm_cache_reserve_enabled', '0' );
+        }
+
+        return '1' === (string) $enabled;
+    }
+
+    public static function get_site_hostname( $blog_id = 0 ) {
+        $url      = $blog_id ? get_home_url( $blog_id, '/' ) : home_url( '/' );
+        $hostname = strtolower( rtrim( (string) wp_parse_url( $url, PHP_URL_HOST ), '.' ) );
+
+        if ( ! $hostname || ! preg_match( '/^[a-z0-9.-]+$/', $hostname ) ) {
+            return '';
+        }
+
+        return $hostname;
+    }
+
     public static function is_logged_in_nocache_enabled() {
         if ( ! self::is_site_enabled() ) {
             return false;
@@ -379,14 +403,15 @@ final class Acquire_Cloudflare_Cache_Manager {
             );
         }
 
-        $rules  = self::recommended_cache_rules( true );
+        $cache_reserve_hostnames = self::cache_reserve_hostnames_for_zone( $zone_id );
+        $rules  = self::recommended_cache_rules( true, $cache_reserve_hostnames );
         $result = self::upsert_recommended_cache_rules( $zone_id, $rules );
 
         if ( ! empty( $result['success'] ) || ! self::is_custom_cache_key_entitlement_error( $result ) ) {
             return $result;
         }
 
-        $fallback_result = self::upsert_recommended_cache_rules( $zone_id, self::recommended_cache_rules( false ) );
+        $fallback_result = self::upsert_recommended_cache_rules( $zone_id, self::recommended_cache_rules( false, $cache_reserve_hostnames ) );
         if ( ! empty( $fallback_result['success'] ) ) {
             $fallback_result['message'] = 'OK. Installed without the custom cache key override because Cloudflare does not entitle this zone to that setting.';
         }
@@ -446,11 +471,21 @@ final class Acquire_Cloudflare_Cache_Manager {
         return false !== stripos( $message, 'custom cache key' ) || false !== stripos( $message, 'custom_key' );
     }
 
-    public static function recommended_cache_rules( $include_custom_cache_key = true ) {
-        return array(
-            self::recommended_cache_everything_rule( $include_custom_cache_key ),
-            self::recommended_bypass_rule(),
-        );
+    public static function recommended_cache_rules( $include_custom_cache_key = true, array $cache_reserve_hostnames = array() ) {
+        $rules = array( self::recommended_cache_everything_rule( $include_custom_cache_key ) );
+
+        foreach ( array_unique( array_filter( $cache_reserve_hostnames ) ) as $hostname ) {
+            $rule = self::recommended_cache_reserve_rule( $hostname );
+            if ( $rule ) {
+                $rules[] = $rule;
+            }
+        }
+
+        // Keep the WordPress bypass last among plugin-managed cache rules so it
+        // overrides cache eligibility for admin, preview, API, and logged-in traffic.
+        $rules[] = self::recommended_bypass_rule();
+
+        return $rules;
     }
 
     public static function recommended_cache_everything_rule( $include_custom_cache_key = true ) {
@@ -498,6 +533,26 @@ final class Acquire_Cloudflare_Cache_Manager {
             'action'            => 'set_cache_settings',
             'enabled'           => true,
             'action_parameters' => $action_parameters,
+        );
+    }
+
+    public static function recommended_cache_reserve_rule( $hostname ) {
+        $hostname = strtolower( rtrim( (string) $hostname, '.' ) );
+        if ( ! $hostname || ! preg_match( '/^[a-z0-9.-]+$/', $hostname ) ) {
+            return null;
+        }
+
+        return array(
+            'description'       => self::CACHE_RESERVE_RULE_PREFIX . $hostname,
+            'expression'        => 'http.host eq "' . $hostname . '"',
+            'action'            => 'set_cache_settings',
+            'enabled'           => true,
+            'action_parameters' => array(
+                'cache'         => true,
+                'cache_reserve' => array(
+                    'eligible' => true,
+                ),
+            ),
         );
     }
 
@@ -553,7 +608,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             }
 
             $description = isset( $rule['description'] ) ? (string) $rule['description'] : '';
-            if ( in_array( $description, $managed_names, true ) ) {
+            if ( in_array( $description, $managed_names, true ) || 0 === strpos( $description, self::CACHE_RESERVE_RULE_PREFIX ) ) {
                 continue;
             }
 
@@ -1244,17 +1299,20 @@ final class Acquire_Cloudflare_Cache_Manager {
                 switch_to_blog( $blog_id );
             }
 
-            $zone_id = self::get_zone_id();
-            $mode    = self::get_site_mode();
-            $enabled = self::is_site_enabled();
+            $zone_id  = self::get_zone_id();
+            $mode     = self::get_site_mode();
+            $enabled  = self::is_site_enabled();
+            $hostname = self::get_site_hostname();
 
             $sites[] = array(
-                'blog_id'  => $blog_id,
-                'name'     => get_bloginfo( 'name' ),
-                'home_url' => home_url( '/' ),
-                'zone_id'  => $zone_id,
-                'mode'     => $mode,
-                'enabled'  => $enabled,
+                'blog_id'       => $blog_id,
+                'name'          => get_bloginfo( 'name' ),
+                'home_url'      => home_url( '/' ),
+                'hostname'      => $hostname,
+                'zone_id'       => $zone_id,
+                'mode'          => $mode,
+                'enabled'       => $enabled,
+                'cache_reserve' => self::is_cache_reserve_enabled(),
             );
 
             if ( is_multisite() ) {
@@ -1263,6 +1321,30 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
 
         return $sites;
+    }
+
+    public static function cache_reserve_hostnames_for_zone( $zone_id ) {
+        $zone_id   = trim( (string) $zone_id );
+        $hostnames = array();
+
+        if ( ! $zone_id ) {
+            return $hostnames;
+        }
+
+        foreach ( self::get_configured_sites() as $site ) {
+            if (
+                empty( $site['enabled'] ) ||
+                empty( $site['cache_reserve'] ) ||
+                empty( $site['hostname'] ) ||
+                $zone_id !== (string) $site['zone_id']
+            ) {
+                continue;
+            }
+
+            $hostnames[] = (string) $site['hostname'];
+        }
+
+        return array_values( array_unique( $hostnames ) );
     }
 
     public static function get_enabled_zones() {
@@ -1408,6 +1490,7 @@ final class Acquire_Cloudflare_Cache_Manager {
 
             update_option( 'acfcm_content_auto_purge', isset( $_POST['acfcm_content_auto_purge'] ) ? '1' : '0' );
             update_option( 'acfcm_logged_in_nocache', isset( $_POST['acfcm_logged_in_nocache'] ) ? '1' : '0' );
+            update_option( 'acfcm_cache_reserve_enabled', isset( $_POST['acfcm_cache_reserve_enabled'] ) ? '1' : '0' );
 
             if ( ! $site_cloudflare_locked && ! defined( 'ACFCM_CLOUDFLARE_API_TOKEN' ) && ! defined( 'CLOUDFLARE_API_TOKEN' ) && ! get_site_option( 'acfcm_cloudflare_api_token', '' ) ) {
                 if ( isset( $_POST['cloudflare_api_token'] ) && '' !== $_POST['cloudflare_api_token'] ) {
@@ -1508,6 +1591,13 @@ final class Acquire_Cloudflare_Cache_Manager {
                         <td><label><input type="checkbox" name="acfcm_logged_in_nocache" value="1" <?php checked( get_option( 'acfcm_logged_in_nocache', '1' ), '1' ); ?> <?php disabled( ! $can_manage_site_cloudflare ); ?>> Send no-cache headers for logged-in users</label></td>
                     </tr>
                     <tr>
+                        <th scope="row">Cache Reserve</th>
+                        <td>
+                            <label><input type="checkbox" name="acfcm_cache_reserve_enabled" value="1" <?php checked( self::is_cache_reserve_enabled() ); ?> <?php disabled( ! $can_manage_site_cloudflare ); ?>> Make this site’s hostname eligible for Cloudflare Cache Reserve</label>
+                            <p class="description">Cache Reserve storage sync must also be enabled for this Cloudflare zone. Installing the recommended rules keeps this hostname rule before the WordPress bypass rule.</p>
+                        </td>
+                    </tr>
+                    <tr>
                         <th scope="row"><label for="cloudflare_api_token">API Token</label></th>
                         <td>
                             <input <?php disabled( ! $token_editable ); ?> type="password" name="cloudflare_api_token" id="cloudflare_api_token" class="regular-text" value="" autocomplete="new-password">
@@ -1575,7 +1665,7 @@ final class Acquire_Cloudflare_Cache_Manager {
 
             <hr>
             <h2>Recommended Cache Rules</h2>
-            <p>Creates or updates the <code><?php echo esc_html( self::CACHE_EVERYTHING_RULE_NAME ); ?></code> and <code><?php echo esc_html( self::BYPASS_RULE_NAME ); ?></code> rules for the current site’s Zone ID. Existing Cloudflare cache rules with other names are preserved.</p>
+            <p>Creates or updates the <code><?php echo esc_html( self::CACHE_EVERYTHING_RULE_NAME ); ?></code> and <code><?php echo esc_html( self::BYPASS_RULE_NAME ); ?></code> rules for the current site’s Zone ID, plus hostname-specific Cache Reserve eligibility when enabled. Existing Cloudflare cache rules with other names are preserved.</p>
             <p class="description">The Cloudflare API token needs Cache Rules and Rulesets edit permissions for this action.</p>
             <p>
                 <?php if ( ! $can_manage_site_cloudflare ) : ?>
@@ -1699,6 +1789,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             check_admin_referer( 'acfcm_save_sites' );
             $site_modes = isset( $_POST['acfcm_site_mode'] ) && is_array( $_POST['acfcm_site_mode'] ) ? wp_unslash( $_POST['acfcm_site_mode'] ) : array();
             $zone_ids   = isset( $_POST['acfcm_zone_id'] ) && is_array( $_POST['acfcm_zone_id'] ) ? wp_unslash( $_POST['acfcm_zone_id'] ) : array();
+            $cache_reserve_sites = isset( $_POST['acfcm_cache_reserve'] ) && is_array( $_POST['acfcm_cache_reserve'] ) ? wp_unslash( $_POST['acfcm_cache_reserve'] ) : array();
 
             foreach ( $site_modes as $blog_id => $mode ) {
                 $blog_id = (int) $blog_id;
@@ -1711,6 +1802,7 @@ final class Acquire_Cloudflare_Cache_Manager {
                 if ( isset( $zone_ids[ $blog_id ] ) ) {
                     update_option( 'cloudflare_zone_id', sanitize_text_field( $zone_ids[ $blog_id ] ) );
                 }
+                update_option( 'acfcm_cache_reserve_enabled', isset( $cache_reserve_sites[ $blog_id ] ) ? '1' : '0' );
                 restore_current_blog();
             }
             echo '<div class="notice notice-success is-dismissible"><p>Site settings saved.</p></div>';
@@ -1802,6 +1894,7 @@ final class Acquire_Cloudflare_Cache_Manager {
 
             <hr>
             <h2>Subsites</h2>
+            <p class="description">Cache Reserve storage sync must be enabled in Cloudflare for the applicable zone. After changing Cache Reserve eligibility here, save the table and reinstall cache rules for any subsite using that Zone ID.</p>
             <form method="post">
                 <?php wp_nonce_field( 'acfcm_save_sites' ); ?>
                 <table class="widefat striped">
@@ -1811,6 +1904,7 @@ final class Acquire_Cloudflare_Cache_Manager {
                             <th>Mode</th>
                             <th>Effective</th>
                             <th>Zone ID</th>
+                            <th>Cache Reserve</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -1827,6 +1921,7 @@ final class Acquire_Cloudflare_Cache_Manager {
                                 </td>
                                 <td><?php echo $site['enabled'] ? '<span style="color:#008a20;font-weight:600;">Enabled</span>' : '<span style="color:#8a0000;font-weight:600;">Disabled</span>'; ?></td>
                                 <td><input type="text" class="regular-text" name="acfcm_zone_id[<?php echo (int) $site['blog_id']; ?>]" value="<?php echo esc_attr( $site['zone_id'] ); ?>"></td>
+                                <td><label><input type="checkbox" name="acfcm_cache_reserve[<?php echo (int) $site['blog_id']; ?>]" value="1" <?php checked( ! empty( $site['cache_reserve'] ) ); ?>> Eligible</label></td>
                                 <td>
                                     <?php if ( ! empty( $site['zone_id'] ) ) : ?>
                                         <a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_purge_network_site&blog_id=' . (int) $site['blog_id'] ), 'acfcm_purge_network_site_' . (int) $site['blog_id'] ) ); ?>" onclick="return confirm('Purge EVERYTHING for this site’s Cloudflare zone?');">Purge Zone</a>
