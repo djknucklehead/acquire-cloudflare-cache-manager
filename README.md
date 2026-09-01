@@ -45,7 +45,7 @@ On multisite, when a shared network or `wp-config.php` Cloudflare API token is a
 2. Update the version number in the plugin header and `const VERSION` when you make changes.
 3. Zip the plugin folder so the zip contains this root folder:
    `acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php`
-4. Create a GitHub Release with a tag such as `v3.3.0`.
+4. Create a GitHub Release with a tag such as `v3.3.1`.
 5. Attach the zip file as a release asset.
 6. WordPress will detect the release as an available plugin update where the GitHub repo is configured or baked into the plugin.
 
@@ -76,15 +76,15 @@ In Network Admin, each subsite row also includes **Install Cache + Basic Securit
 
 The plugin creates or updates these cache rules in Cloudflare's cache settings phase:
 
-- `Cache Everything [Template]`: makes requests eligible for cache, tries to ignore query strings in the cache key, sets a 7-day default edge TTL, caches 2xx responses for 1 day, avoids caching 300+ responses, and leaves Cache Reserve ineligible by default.
-- `ACFCM - Cache Reserve: hostname`: created for each enabled site that opts into Cache Reserve. It makes only that canonical hostname eligible for Cache Reserve.
+- `Cache Everything [Template]`: makes requests eligible for cache, tries to ignore query strings in the cache key, sets a 7-day default edge TTL, caches 2xx responses for 1 day, caches 301 and 304 for 1 day, avoids caching most other 300+ responses, and caches 404/410 responses for 2 hours.
+- `ACFCM - Cache Reserve: hostname`: created for each enabled site that opts into Cache Reserve. It makes only that canonical hostname eligible for Cache Reserve with a 50 KB minimum file size.
 - `BYPASS`: runs after the cache-everything rule and bypasses cache for WordPress admin/login/API/preview/logged-in requests while leaving static assets cacheable.
 
 The plugin always orders hostname-specific Cache Reserve rules between `Cache Everything [Template]` and `BYPASS`. If multiple multisite domains use the same Zone ID, installing recommended rules for any one of them rebuilds the complete set of opted-in hostnames for that zone.
 
-Cache Reserve storage sync and a paid Cache Reserve plan must be enabled separately in Cloudflare for the applicable zone. Cloudflare also requires eligible responses to have a freshness TTL of at least 10 hours and a `Content-Length` response header. The plugin's 2xx edge TTL meets the freshness requirement, but the origin must supply `Content-Length`. URL purges sent after public content changes remove matching assets from both edge cache and Cache Reserve.
+Cache Reserve storage sync and a paid Cache Reserve plan must be enabled separately in Cloudflare for the applicable zone. Cloudflare also requires eligible responses to have a freshness TTL of at least 10 hours and a `Content-Length` response header. The plugin's 2xx/301/304 edge TTL meets the freshness requirement, but the origin must supply `Content-Length`. URL purges sent after public content changes remove matching assets from both edge cache and Cache Reserve.
 
-Other existing Cloudflare cache rules are preserved. If Cloudflare reports that a zone is not entitled to custom cache key overrides, the installer retries without the ignore-query-string cache key setting.
+Other existing Cloudflare cache rules are preserved. If Cloudflare reports that a zone is not entitled to custom cache key overrides, the installer retries without the ignore-query-string cache key setting. If Cloudflare reports that Cache Reserve is not enabled or not entitled for the zone, the installer retries without plugin-managed Cache Reserve eligibility rules so the ordinary cache rules can still install.
 
 
 ## Optional Cloudflare hardening rules
@@ -110,9 +110,9 @@ Future release flow:
 1. Update the version in the plugin header and `const VERSION`.
 2. Update `CHANGELOG.md`.
 3. Commit and push to `main`.
-4. On GitHub.com, create a new release using a tag like `v3.3.0`.
+4. On GitHub.com, create a new release using a tag like `v3.3.1`.
 5. Publish the release without manually attaching a zip.
-6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.3.0.zip` and attach it to the release automatically.
+6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.3.1.zip` and attach it to the release automatically.
 
 The workflow validates that the release tag matches the plugin version before uploading the zip.
 

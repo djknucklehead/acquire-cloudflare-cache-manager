@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with per-site purging, optional Cache Reserve eligibility, cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.3.0
+ * Version:     3.3.1
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.3.0';
+    const VERSION       = '3.3.1';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -31,6 +31,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     const RATE_LIMIT_RULE_PHASE = 'http_ratelimit';
     const CACHE_EVERYTHING_RULE_NAME = 'Cache Everything [Template]';
     const CACHE_RESERVE_RULE_PREFIX = 'ACFCM - Cache Reserve: ';
+    const CACHE_RESERVE_MINIMUM_FILE_SIZE = 50000;
     const BYPASS_RULE_NAME = 'BYPASS';
     const HARDENING_WP_PROBES_RULE_NAME = 'ACFCM - Block WordPress exploit probes';
     const HARDENING_XMLRPC_RULE_NAME = 'ACFCM - Block XML-RPC';
@@ -404,19 +405,77 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
 
         $cache_reserve_hostnames = self::cache_reserve_hostnames_for_zone( $zone_id );
-        $rules  = self::recommended_cache_rules( true, $cache_reserve_hostnames );
-        $result = self::upsert_recommended_cache_rules( $zone_id, $rules );
+        return self::install_recommended_cache_rules_with_fallbacks( $zone_id, $cache_reserve_hostnames );
+    }
 
-        if ( ! empty( $result['success'] ) || ! self::is_custom_cache_key_entitlement_error( $result ) ) {
-            return $result;
+    public static function install_recommended_cache_rules_with_fallbacks( $zone_id, array $cache_reserve_hostnames ) {
+        $queue = array(
+            array(
+                'custom_key'    => true,
+                'cache_reserve' => ! empty( $cache_reserve_hostnames ),
+            ),
+        );
+        $attempted = array();
+        $last_result = null;
+
+        while ( ! empty( $queue ) ) {
+            $attempt = array_shift( $queue );
+            $attempt_key = ( $attempt['custom_key'] ? '1' : '0' ) . ':' . ( $attempt['cache_reserve'] ? '1' : '0' );
+            if ( isset( $attempted[ $attempt_key ] ) ) {
+                continue;
+            }
+
+            $attempted[ $attempt_key ] = true;
+            $hostnames = $attempt['cache_reserve'] ? $cache_reserve_hostnames : array();
+            $result = self::upsert_recommended_cache_rules(
+                $zone_id,
+                self::recommended_cache_rules( $attempt['custom_key'], $hostnames )
+            );
+
+            if ( ! empty( $result['success'] ) ) {
+                $result['message'] = self::cache_rules_success_message_for_attempt( $attempt, ! empty( $cache_reserve_hostnames ) );
+                return $result;
+            }
+
+            $last_result = $result;
+
+            if ( $attempt['custom_key'] && self::is_custom_cache_key_entitlement_error( $result ) ) {
+                $queue[] = array(
+                    'custom_key'    => false,
+                    'cache_reserve' => $attempt['cache_reserve'],
+                );
+            }
+
+            if ( $attempt['cache_reserve'] && self::is_cache_reserve_entitlement_error( $result ) ) {
+                $queue[] = array(
+                    'custom_key'    => $attempt['custom_key'],
+                    'cache_reserve' => false,
+                );
+            }
         }
 
-        $fallback_result = self::upsert_recommended_cache_rules( $zone_id, self::recommended_cache_rules( false, $cache_reserve_hostnames ) );
-        if ( ! empty( $fallback_result['success'] ) ) {
-            $fallback_result['message'] = 'OK. Installed without the custom cache key override because Cloudflare does not entitle this zone to that setting.';
+        return $last_result ? $last_result : array(
+            'success' => false,
+            'code'    => 0,
+            'message' => 'Cloudflare cache rules could not be installed or updated.',
+            'body'    => '',
+            'json'    => null,
+            'result'  => null,
+        );
+    }
+
+    public static function cache_rules_success_message_for_attempt( array $attempt, $cache_reserve_requested = false ) {
+        $messages = array();
+
+        if ( empty( $attempt['custom_key'] ) ) {
+            $messages[] = 'Installed without the custom cache key override because Cloudflare does not entitle this zone to that setting.';
         }
 
-        return $fallback_result;
+        if ( $cache_reserve_requested && empty( $attempt['cache_reserve'] ) ) {
+            $messages[] = 'Installed without Cache Reserve eligibility because Cloudflare does not entitle this zone to that setting or Cache Reserve is not enabled.';
+        }
+
+        return empty( $messages ) ? 'OK' : 'OK. ' . implode( ' ', $messages );
     }
 
     public static function upsert_recommended_cache_rules( $zone_id, array $rules ) {
@@ -471,6 +530,21 @@ final class Acquire_Cloudflare_Cache_Manager {
         return false !== stripos( $message, 'custom cache key' ) || false !== stripos( $message, 'custom_key' );
     }
 
+    public static function is_cache_reserve_entitlement_error( array $result ) {
+        $message = isset( $result['message'] ) ? (string) $result['message'] : '';
+        if ( false === stripos( $message, 'cache reserve' ) && false === stripos( $message, 'cache_reserve' ) ) {
+            return false;
+        }
+
+        foreach ( array( 'not entitled', 'not enabled', 'not allowed', 'requires', 'subscription', 'plan', 'permission' ) as $needle ) {
+            if ( false !== stripos( $message, $needle ) ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static function recommended_cache_rules( $include_custom_cache_key = true, array $cache_reserve_hostnames = array() ) {
         $rules = array( self::recommended_cache_everything_rule( $include_custom_cache_key ) );
 
@@ -502,8 +576,49 @@ final class Acquire_Cloudflare_Cache_Manager {
                         'value'             => 86400,
                     ),
                     array(
+                        'status_code' => 300,
+                        'value'       => 0,
+                    ),
+                    array(
+                        'status_code' => 301,
+                        'value'       => 86400,
+                    ),
+                    array(
                         'status_code_range' => array(
-                            'from' => 300,
+                            'from' => 302,
+                            'to'   => 303,
+                        ),
+                        'value'             => 0,
+                    ),
+                    array(
+                        'status_code' => 304,
+                        'value'       => 86400,
+                    ),
+                    array(
+                        'status_code_range' => array(
+                            'from' => 305,
+                            'to'   => 403,
+                        ),
+                        'value'             => 0,
+                    ),
+                    array(
+                        'status_code' => 404,
+                        'value'       => 7200,
+                    ),
+                    array(
+                        'status_code_range' => array(
+                            'from' => 405,
+                            'to'   => 409,
+                        ),
+                        'value'             => 0,
+                    ),
+                    array(
+                        'status_code' => 410,
+                        'value'       => 7200,
+                    ),
+                    array(
+                        'status_code_range' => array(
+                            'from' => 411,
                         ),
                         'value'             => 0,
                     ),
@@ -550,7 +665,8 @@ final class Acquire_Cloudflare_Cache_Manager {
             'action_parameters' => array(
                 'cache'         => true,
                 'cache_reserve' => array(
-                    'eligible' => true,
+                    'eligible'          => true,
+                    'minimum_file_size' => self::CACHE_RESERVE_MINIMUM_FILE_SIZE,
                 ),
             ),
         );
@@ -1594,7 +1710,7 @@ final class Acquire_Cloudflare_Cache_Manager {
                         <th scope="row">Cache Reserve</th>
                         <td>
                             <label><input type="checkbox" name="acfcm_cache_reserve_enabled" value="1" <?php checked( self::is_cache_reserve_enabled() ); ?> <?php disabled( ! $can_manage_site_cloudflare ); ?>> Make this site’s hostname eligible for Cloudflare Cache Reserve</label>
-                            <p class="description">Cache Reserve storage sync must also be enabled for this Cloudflare zone. Installing the recommended rules keeps this hostname rule before the WordPress bypass rule.</p>
+                            <p class="description">Cache Reserve storage sync must also be enabled for this Cloudflare zone. Installing the recommended rules makes this hostname eligible with a 50 KB minimum file size and keeps the hostname rule before the WordPress bypass rule.</p>
                         </td>
                     </tr>
                     <tr>
@@ -1894,7 +2010,7 @@ final class Acquire_Cloudflare_Cache_Manager {
 
             <hr>
             <h2>Subsites</h2>
-            <p class="description">Cache Reserve storage sync must be enabled in Cloudflare for the applicable zone. After changing Cache Reserve eligibility here, save the table and reinstall cache rules for any subsite using that Zone ID.</p>
+            <p class="description">Cache Reserve storage sync must be enabled in Cloudflare for the applicable zone. Eligible hostname rules use a 50 KB minimum file size. After changing Cache Reserve eligibility here, save the table and reinstall cache rules for any subsite using that Zone ID.</p>
             <form method="post">
                 <?php wp_nonce_field( 'acfcm_save_sites' ); ?>
                 <table class="widefat striped">

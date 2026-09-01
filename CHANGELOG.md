@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.3.1
+- Updated the recommended `Cache Everything [Template]` status-code TTL policy: 2xx responses cache for 1 day, 301 and 304 cache for 1 day, 404 and 410 cache for 2 hours, and other 300+ responses bypass cache.
+- Added a 50 KB minimum file size to plugin-managed Cache Reserve eligibility rules.
+- Added a fallback so recommended cache rules still install without Cache Reserve eligibility when Cloudflare reports that Cache Reserve is not enabled or not entitled for the zone.
+
 ## 3.3.0
 - Added opt-in Cloudflare Cache Reserve eligibility for standalone sites and individual multisite subsites.
 - Added hostname-specific managed Cache Reserve rules so one domain can use Cache Reserve even when multiple sites share a Cloudflare zone.
