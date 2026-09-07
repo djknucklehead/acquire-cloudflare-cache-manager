@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.4.0
+- Added opt-in Smart Tiered Cache enablement for standalone sites and multisite subsites.
+- Recommended cache rule installation now enables Cloudflare's zone-level Smart Tiered Cache setting for zones with at least one opted-in enabled site.
+- Added warning notices when cache rules install but Cloudflare cannot enable Smart Tiered Cache.
+
 ## 3.3.1
 - Updated the recommended `Cache Everything [Template]` status-code TTL policy: 2xx responses cache for 1 day, 301 and 304 cache for 1 day, 404 and 410 cache for 2 hours, and other 300+ responses bypass cache.
 - Added a 50 KB minimum file size to plugin-managed Cache Reserve eligibility rules.
