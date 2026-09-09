@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.4.1
+- Fixed Smart Tiered Cache enablement by turning on Cloudflare's base Tiered Cache setting before selecting the Smart topology.
+- Clarified Smart Tiered Cache labels and notices so they describe both zone-level Cloudflare settings.
+
 ## 3.4.0
 - Added opt-in Smart Tiered Cache enablement for standalone sites and multisite subsites.
 - Recommended cache rule installation now enables Cloudflare's zone-level Smart Tiered Cache setting for zones with at least one opted-in enabled site.

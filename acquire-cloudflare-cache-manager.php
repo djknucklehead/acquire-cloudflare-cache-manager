@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with per-site purging, optional Cache Reserve and Smart Tiered Cache support, cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.4.0
+ * Version:     3.4.1
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.4.0';
+    const VERSION       = '3.4.1';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -32,6 +32,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     const CACHE_EVERYTHING_RULE_NAME = 'Cache Everything [Template]';
     const CACHE_RESERVE_RULE_PREFIX = 'ACFCM - Cache Reserve: ';
     const CACHE_RESERVE_MINIMUM_FILE_SIZE = 50000;
+    const TIERED_CACHE_SETTING_PATH = 'argo/tiered_caching';
     const SMART_TIERED_CACHE_SETTING_PATH = 'cache/tiered_cache_smart_topology_enable';
     const BYPASS_RULE_NAME = 'BYPASS';
     const HARDENING_WP_PROBES_RULE_NAME = 'ACFCM - Block WordPress exploit probes';
@@ -418,6 +419,12 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
 
         $payload = array( 'value' => 'on' );
+        $tiered_cache_result = self::cloudflare_request( 'PATCH', $zone_id, self::TIERED_CACHE_SETTING_PATH, $payload, 20 );
+
+        if ( empty( $tiered_cache_result['success'] ) ) {
+            return self::cloudflare_setting_error_result( $tiered_cache_result, 'Tiered Cache could not be enabled' );
+        }
+
         $result  = self::cloudflare_request( 'PATCH', $zone_id, self::SMART_TIERED_CACHE_SETTING_PATH, $payload, 20 );
 
         if ( ! empty( $result['success'] ) ) {
@@ -425,9 +432,20 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
 
         if ( in_array( (int) $result['code'], array( 404, 405 ), true ) ) {
-            return self::cloudflare_request( 'POST', $zone_id, self::SMART_TIERED_CACHE_SETTING_PATH, $payload, 20 );
+            $result = self::cloudflare_request( 'POST', $zone_id, self::SMART_TIERED_CACHE_SETTING_PATH, $payload, 20 );
         }
 
+        if ( empty( $result['success'] ) ) {
+            return self::cloudflare_setting_error_result( $result, 'Smart Tiered Cache topology could not be selected' );
+        }
+
+        return $result;
+    }
+
+    public static function cloudflare_setting_error_result( array $result, $prefix ) {
+        $detail = ! empty( $result['message'] ) ? self::short_notice_message( $result['message'] ) : 'Cloudflare request failed.';
+        $result['success'] = false;
+        $result['message'] = trim( (string) $prefix ) . ': ' . $detail;
         return $result;
     }
 
@@ -456,7 +474,7 @@ final class Acquire_Cloudflare_Cache_Manager {
         if ( ! empty( $smart_tiered_cache_result['success'] ) ) {
             $result['message'] = self::append_cache_rules_message(
                 isset( $result['message'] ) ? $result['message'] : 'OK',
-                'Smart Tiered Cache enabled.'
+                'Tiered Cache enabled with Smart topology.'
             );
             return $result;
         }
@@ -467,7 +485,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             : 'Cloudflare request failed.';
         $result['message'] = self::append_cache_rules_message(
             isset( $result['message'] ) ? $result['message'] : 'OK',
-            'Smart Tiered Cache could not be enabled: ' . $detail
+            $detail
         );
         return $result;
     }
@@ -1821,8 +1839,8 @@ final class Acquire_Cloudflare_Cache_Manager {
                     <tr>
                         <th scope="row">Smart Tiered Cache</th>
                         <td>
-                            <label><input type="checkbox" name="acfcm_smart_tiered_cache_enabled" value="1" <?php checked( self::is_smart_tiered_cache_enabled() ); ?> <?php disabled( ! $can_manage_site_cloudflare ); ?>> Enable Smart Tiered Cache for this Cloudflare zone when installing recommended cache rules</label>
-                            <p class="description">Smart Tiered Cache is a zone-level Cloudflare setting. Unchecking this option stops the plugin from enabling it, but does not turn it off in Cloudflare.</p>
+                            <label><input type="checkbox" name="acfcm_smart_tiered_cache_enabled" value="1" <?php checked( self::is_smart_tiered_cache_enabled() ); ?> <?php disabled( ! $can_manage_site_cloudflare ); ?>> Enable Tiered Cache with Smart topology for this Cloudflare zone when installing recommended cache rules</label>
+                            <p class="description">Tiered Cache and Smart topology are zone-level Cloudflare settings. Unchecking this option stops the plugin from enabling them, but does not turn them off in Cloudflare.</p>
                         </td>
                     </tr>
                     <tr>
@@ -1893,8 +1911,8 @@ final class Acquire_Cloudflare_Cache_Manager {
 
             <hr>
             <h2>Recommended Cache Rules</h2>
-            <p>Creates or updates the <code><?php echo esc_html( self::CACHE_EVERYTHING_RULE_NAME ); ?></code> and <code><?php echo esc_html( self::BYPASS_RULE_NAME ); ?></code> rules for the current site’s Zone ID, plus hostname-specific Cache Reserve eligibility and Smart Tiered Cache enablement when selected. Existing Cloudflare cache rules with other names are preserved.</p>
-            <p class="description">The Cloudflare API token needs Cache Rules and Rulesets edit permissions for this action. Enabling Smart Tiered Cache also requires permission to edit the zone setting.</p>
+            <p>Creates or updates the <code><?php echo esc_html( self::CACHE_EVERYTHING_RULE_NAME ); ?></code> and <code><?php echo esc_html( self::BYPASS_RULE_NAME ); ?></code> rules for the current site’s Zone ID, plus hostname-specific Cache Reserve eligibility and Tiered Cache Smart topology enablement when selected. Existing Cloudflare cache rules with other names are preserved.</p>
+            <p class="description">The Cloudflare API token needs Cache Rules and Rulesets edit permissions for this action. Enabling Tiered Cache with Smart topology also requires permission to edit zone settings.</p>
             <p>
                 <?php if ( ! $can_manage_site_cloudflare ) : ?>
                     Network Admin permission is required to install Cloudflare rules while a shared Cloudflare API token is active.
@@ -2124,7 +2142,7 @@ final class Acquire_Cloudflare_Cache_Manager {
 
             <hr>
             <h2>Subsites</h2>
-            <p class="description">Cache Reserve storage sync must be enabled in Cloudflare for the applicable zone. Eligible hostname rules use a 50 KB minimum file size. Smart Tiered Cache is a zone-level Cloudflare setting. After changing either option here, save the table and reinstall cache rules for any subsite using that Zone ID.</p>
+            <p class="description">Cache Reserve storage sync must be enabled in Cloudflare for the applicable zone. Eligible hostname rules use a 50 KB minimum file size. Tiered Cache and Smart topology are zone-level Cloudflare settings. After changing either option here, save the table and reinstall cache rules for any subsite using that Zone ID.</p>
             <form method="post">
                 <?php wp_nonce_field( 'acfcm_save_sites' ); ?>
                 <table class="widefat striped">

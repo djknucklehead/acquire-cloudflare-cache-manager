@@ -12,7 +12,7 @@ Cloudflare cache purging plugin for standalone WordPress sites and WordPress mul
 - Automatically purges related URLs on public content updates.
 - Creates or updates the recommended Cloudflare `Cache Everything [Template]` and `BYPASS` cache rules for configured Zone IDs.
 - Optionally makes selected standalone sites or multisite subsite hostnames eligible for Cloudflare Cache Reserve.
-- Optionally enables Cloudflare Smart Tiered Cache for selected Cloudflare zones when installing recommended cache rules.
+- Optionally enables Cloudflare Tiered Cache with Smart topology for selected Cloudflare zones when installing recommended cache rules.
 - Creates or updates optional Cloudflare hardening rules for common WordPress exploit probes, XML-RPC, and query-string abuse on static/legal pages.
 - Purges all enabled Cloudflare zones after WordPress core/plugin/theme updates.
 - Includes manual purge controls in Network Admin on multisite and in Settings on standalone installs.
@@ -36,7 +36,7 @@ define( 'ACFCM_GITHUB_TOKEN', 'YOUR_GITHUB_TOKEN' );
 
 The plugin is also backward-compatible with the older `CLOUDFLARE_API_TOKEN` constant.
 
-For purge-only use, the token can be limited to cache purge access. To use the recommended cache rule setup action, the token also needs Cloudflare's `Zone > Cache Rules > Edit`, `Account Rulesets > Edit`, and `Account Filter Lists > Edit` permissions for the relevant zone/account. Enabling Smart Tiered Cache also needs permission to edit the zone setting, shown in Cloudflare as `Zone > Zone Settings > Edit` or `Zone > Cache Settings > Edit` depending on the token UI. To use hardening rule setup, the token needs `Zone > WAF > Edit`; the high-rate query-string option may also require `Zone > Rate Limiting Rules > Edit` and plan support for rate limiting rules.
+For purge-only use, the token can be limited to cache purge access. To use the recommended cache rule setup action, the token also needs Cloudflare's `Zone > Cache Rules > Edit`, `Account Rulesets > Edit`, and `Account Filter Lists > Edit` permissions for the relevant zone/account. Enabling Tiered Cache with Smart topology also needs permission to edit zone settings, shown in Cloudflare as `Zone > Zone Settings > Edit` or `Zone > Cache Settings > Edit` depending on the token UI. To use hardening rule setup, the token needs `Zone > WAF > Edit`; the high-rate query-string option may also require `Zone > Rate Limiting Rules > Edit` and plan support for rate limiting rules.
 
 On multisite, when a shared network or `wp-config.php` Cloudflare API token is active, Network Admin owns subsite Cloudflare mode, Zone ID, plugin settings, and Cloudflare rule installation actions. Site admins can still run manual purge actions for their own subsite. If no shared token is configured, individual subsites can continue to use their own saved Zone ID and per-site token.
 
@@ -46,7 +46,7 @@ On multisite, when a shared network or `wp-config.php` Cloudflare API token is a
 2. Update the version number in the plugin header and `const VERSION` when you make changes.
 3. Zip the plugin folder so the zip contains this root folder:
    `acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php`
-4. Create a GitHub Release with a tag such as `v3.4.0`.
+4. Create a GitHub Release with a tag such as `v3.4.1`.
 5. Attach the zip file as a release asset.
 6. WordPress will detect the release as an available plugin update where the GitHub repo is configured or baked into the plugin.
 
@@ -62,7 +62,7 @@ This build defaults to `djknucklehead/acquire-cloudflare-cache-manager` for upda
 
 On a standalone WordPress install, the plugin uses **Settings → Cloudflare Cache** for everything:
 
-- Site mode, Zone ID, token source, recommended cache rule setup, Cache Reserve eligibility, Smart Tiered Cache enablement, content purge, and logged-in no-cache settings.
+- Site mode, Zone ID, token source, recommended cache rule setup, Cache Reserve eligibility, Tiered Cache Smart topology enablement, content purge, and logged-in no-cache settings.
 - WordPress update purge settings for core/plugin/theme/translation updates.
 - GitHub update source settings.
 - Recent purge log.
@@ -83,7 +83,7 @@ The plugin creates or updates these cache rules in Cloudflare's cache settings p
 
 The plugin always orders hostname-specific Cache Reserve rules between `Cache Everything [Template]` and `BYPASS`. If multiple multisite domains use the same Zone ID, installing recommended rules for any one of them rebuilds the complete set of opted-in hostnames for that zone.
 
-Smart Tiered Cache is not a cache rule. When the Smart Tiered Cache option is enabled for a standalone site or any enabled multisite subsite in a zone, the recommended cache rule installer also enables Cloudflare's zone-level Smart Tiered Cache setting for that zone. Unchecking the plugin option stops future installer runs from enabling it, but does not turn the setting off in Cloudflare.
+Smart Tiered Cache is not a cache rule. When the Smart Tiered Cache option is enabled for a standalone site or any enabled multisite subsite in a zone, the recommended cache rule installer enables Cloudflare's zone-level Tiered Cache setting and then selects Smart topology for that zone. Unchecking the plugin option stops future installer runs from enabling those settings, but does not turn them off in Cloudflare.
 
 Cache Reserve storage sync and a paid Cache Reserve plan must be enabled separately in Cloudflare for the applicable zone. Cloudflare also requires eligible responses to have a freshness TTL of at least 10 hours and a `Content-Length` response header. The plugin's 2xx/301/304 edge TTL meets the freshness requirement, but the origin must supply `Content-Length`. URL purges sent after public content changes remove matching assets from both edge cache and Cache Reserve.
 
@@ -113,9 +113,9 @@ Future release flow:
 1. Update the version in the plugin header and `const VERSION`.
 2. Update `CHANGELOG.md`.
 3. Commit and push to `main`.
-4. On GitHub.com, create a new release using a tag like `v3.4.0`.
+4. On GitHub.com, create a new release using a tag like `v3.4.1`.
 5. Publish the release without manually attaching a zip.
-6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.4.0.zip` and attach it to the release automatically.
+6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.4.1.zip` and attach it to the release automatically.
 
 The workflow validates that the release tag matches the plugin version before uploading the zip.
 
