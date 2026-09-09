@@ -11,6 +11,7 @@ Cloudflare cache purging plugin for standalone WordPress sites and WordPress mul
 - Adds subsite toolbar purge options for enabled sites.
 - Automatically purges related URLs on public content updates.
 - Creates or updates the recommended Cloudflare `Cache Everything [Template]` and `BYPASS` cache rules for configured Zone IDs.
+- Reduces ad and analytics query-string cache fragmentation when Cloudflare entitles the zone to custom cache key settings.
 - Optionally makes selected standalone sites or multisite subsite hostnames eligible for Cloudflare Cache Reserve.
 - Optionally enables Cloudflare Tiered Cache with Smart topology for selected Cloudflare zones when installing recommended cache rules.
 - Creates or updates optional Cloudflare hardening rules for common WordPress exploit probes, XML-RPC, and query-string abuse on static/legal pages.
@@ -46,7 +47,7 @@ On multisite, when a shared network or `wp-config.php` Cloudflare API token is a
 2. Update the version number in the plugin header and `const VERSION` when you make changes.
 3. Zip the plugin folder so the zip contains this root folder:
    `acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php`
-4. Create a GitHub Release with a tag such as `v3.4.1`.
+4. Create a GitHub Release with a tag such as `v3.4.2`.
 5. Attach the zip file as a release asset.
 6. WordPress will detect the release as an available plugin update where the GitHub repo is configured or baked into the plugin.
 
@@ -77,17 +78,19 @@ In Network Admin, each subsite row also includes **Install Cache + Basic Securit
 
 The plugin creates or updates these cache rules in Cloudflare's cache settings phase:
 
-- `Cache Everything [Template]`: makes requests eligible for cache, tries to ignore query strings in the cache key, sets a 7-day default edge TTL, caches 2xx responses for 1 day, caches 301 and 304 for 1 day, avoids caching most other 300+ responses, and caches 404/410 responses for 2 hours.
+- `Cache Everything [Template]`: makes requests eligible for cache, tries to exclude common ad and analytics query parameters from the cache key, sets a 7-day default edge TTL, caches 2xx responses for 1 day, caches 301 and 304 for 1 day, avoids caching most other 300+ responses, and caches 404/410 responses for 2 hours.
 - `ACFCM - Cache Reserve: hostname`: created for each enabled site that opts into Cache Reserve. It makes only that canonical hostname eligible for Cache Reserve with a 50 KB minimum file size.
 - `BYPASS`: runs after the cache-everything rule and bypasses cache for WordPress admin/login/API/preview/logged-in requests while leaving static assets cacheable.
 
 The plugin always orders hostname-specific Cache Reserve rules between `Cache Everything [Template]` and `BYPASS`. If multiple multisite domains use the same Zone ID, installing recommended rules for any one of them rebuilds the complete set of opted-in hostnames for that zone.
 
+When Cloudflare accepts the custom cache key setting, the plugin excludes common tracking parameters such as `utm_source`, `utm_medium`, `utm_campaign`, `gclid`, `gbraid`, `wbraid`, `fbclid`, `msclkid`, and `ttclid` from the cache key. It preserves functional query strings, including WordPress asset versions, search, filters, pagination, previews, AJAX, and cart actions. Developers can customize the ignored parameter list with the `acfcm_marketing_query_parameters_to_ignore` filter.
+
 Smart Tiered Cache is not a cache rule. When the Smart Tiered Cache option is enabled for a standalone site or any enabled multisite subsite in a zone, the recommended cache rule installer enables Cloudflare's zone-level Tiered Cache setting and then selects Smart topology for that zone. Unchecking the plugin option stops future installer runs from enabling those settings, but does not turn them off in Cloudflare.
 
 Cache Reserve storage sync and a paid Cache Reserve plan must be enabled separately in Cloudflare for the applicable zone. Cloudflare also requires eligible responses to have a freshness TTL of at least 10 hours and a `Content-Length` response header. The plugin's 2xx/301/304 edge TTL meets the freshness requirement, but the origin must supply `Content-Length`. URL purges sent after public content changes remove matching assets from both edge cache and Cache Reserve.
 
-Other existing Cloudflare cache rules are preserved. If Cloudflare reports that a zone is not entitled to custom cache key overrides, the installer retries without the ignore-query-string cache key setting. If Cloudflare reports that Cache Reserve is not enabled or not entitled for the zone, the installer retries without plugin-managed Cache Reserve eligibility rules so the ordinary cache rules can still install.
+Other existing Cloudflare cache rules are preserved. If Cloudflare reports that a zone is not entitled to custom cache key overrides, the installer retries without the marketing query-string cache key setting. If Cloudflare reports that Cache Reserve is not enabled or not entitled for the zone, the installer retries without plugin-managed Cache Reserve eligibility rules so the ordinary cache rules can still install.
 
 
 ## Optional Cloudflare hardening rules
@@ -113,9 +116,9 @@ Future release flow:
 1. Update the version in the plugin header and `const VERSION`.
 2. Update `CHANGELOG.md`.
 3. Commit and push to `main`.
-4. On GitHub.com, create a new release using a tag like `v3.4.1`.
+4. On GitHub.com, create a new release using a tag like `v3.4.2`.
 5. Publish the release without manually attaching a zip.
-6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.4.1.zip` and attach it to the release automatically.
+6. GitHub Actions will build `acquire-cloudflare-cache-manager-v3.4.2.zip` and attach it to the release automatically.
 
 The workflow validates that the release tag matches the plugin version before uploading the zip.
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.4.2
+- Replaced the aggressive ignore-all-query-strings cache key override with a safer marketing-parameter exclusion list for ad and analytics query strings.
+- Updated the cache key payload to Cloudflare's current Rulesets API shape for named query-string exclusions.
+- Preserved functional query strings such as WordPress asset versions, search, filters, pagination, previews, AJAX, and cart actions in the cache key.
+
 ## 3.4.1
 - Fixed Smart Tiered Cache enablement by turning on Cloudflare's base Tiered Cache setting before selecting the Smart topology.
 - Clarified Smart Tiered Cache labels and notices so they describe both zone-level Cloudflare settings.

@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with per-site purging, optional Cache Reserve and Smart Tiered Cache support, cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.4.1
+ * Version:     3.4.2
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.4.1';
+    const VERSION       = '3.4.2';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -565,7 +565,7 @@ final class Acquire_Cloudflare_Cache_Manager {
         $messages = array();
 
         if ( empty( $attempt['custom_key'] ) ) {
-            $messages[] = 'Installed without the custom cache key override because Cloudflare does not entitle this zone to that setting.';
+            $messages[] = 'Installed without the marketing query-string cache key override because Cloudflare does not entitle this zone to that setting.';
         }
 
         if ( $cache_reserve_requested && empty( $attempt['cache_reserve'] ) ) {
@@ -659,6 +659,46 @@ final class Acquire_Cloudflare_Cache_Manager {
         return $rules;
     }
 
+    public static function marketing_query_parameters_to_ignore() {
+        $parameters = array(
+            '_gl',
+            'dclid',
+            'epik',
+            'fbclid',
+            'gad_source',
+            'gbraid',
+            'gclid',
+            'igshid',
+            'li_fat_id',
+            'mc_cid',
+            'mc_eid',
+            'msclkid',
+            'ttclid',
+            'twclid',
+            'utm_campaign',
+            'utm_content',
+            'utm_creative_format',
+            'utm_id',
+            'utm_marketing_tactic',
+            'utm_medium',
+            'utm_source',
+            'utm_source_platform',
+            'utm_term',
+            'wbraid',
+            'yclid',
+        );
+
+        $parameters = apply_filters( 'acfcm_marketing_query_parameters_to_ignore', $parameters );
+        if ( ! is_array( $parameters ) ) {
+            return array();
+        }
+
+        $parameters = array_map( 'sanitize_key', $parameters );
+        $parameters = array_filter( $parameters );
+
+        return array_values( array_unique( $parameters ) );
+    }
+
     public static function recommended_cache_everything_rule( $include_custom_cache_key = true ) {
         $action_parameters = array(
             'cache'                     => true,
@@ -728,15 +768,20 @@ final class Acquire_Cloudflare_Cache_Manager {
         );
 
         if ( $include_custom_cache_key ) {
-            $action_parameters['cache_key'] = array(
-                'cache_deception_armor'     => false,
-                'ignore_query_strings_order' => false,
-                'custom_key'                => array(
-                    'query_string' => array(
-                        'exclude' => array( '*' ),
+            $marketing_query_parameters = self::marketing_query_parameters_to_ignore();
+            if ( ! empty( $marketing_query_parameters ) ) {
+                $action_parameters['cache_key'] = array(
+                    'cache_deception_armor'     => false,
+                    'ignore_query_strings_order' => false,
+                    'custom_key'                => array(
+                        'query_string' => array(
+                            'exclude' => array(
+                                'list' => $marketing_query_parameters,
+                            ),
+                        ),
                     ),
-                ),
-            );
+                );
+            }
         }
 
         return array(
