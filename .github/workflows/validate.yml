@@ -22,6 +22,9 @@ jobs:
       - name: Check PHP syntax
         run: php -l acquire-cloudflare-cache-manager.php
 
+      - name: Purge regression tests
+        run: php tests/purge-regression.php
+
       - name: Check plugin version consistency
         run: |
           PLUGIN_VERSION="$(sed -nE 's/^[[:space:]]+\*[[:space:]]Version:[[:space:]]+([^[:space:]]+).*/\1/p' acquire-cloudflare-cache-manager.php | head -n 1)"

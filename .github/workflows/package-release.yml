@@ -52,21 +52,13 @@ jobs:
           echo "package_name=acquire-cloudflare-cache-manager-v$PLUGIN_VERSION.zip" >> "$GITHUB_OUTPUT"
 
       - name: Build plugin zip
+        env:
+          PACKAGE_NAME: ${{ steps.version.outputs.package_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
         run: |
-          PACKAGE_NAME="${{ steps.version.outputs.package_name }}"
-          STAGING_DIR="$(mktemp -d)"
-
-          mkdir -p "$STAGING_DIR/acquire-cloudflare-cache-manager"
-          rsync -a \
-            --exclude='.git*' \
-            --exclude='.github' \
-            --exclude='AGENTS.md' \
-            --exclude='.DS_Store' \
-            --exclude='*.zip' \
-            ./ "$STAGING_DIR/acquire-cloudflare-cache-manager/"
-
-          cd "$STAGING_DIR"
-          zip -r "$GITHUB_WORKSPACE/$PACKAGE_NAME" acquire-cloudflare-cache-manager
+          python3 tools/package.py \
+            --tag "$RELEASE_TAG" \
+            --output "$GITHUB_WORKSPACE/$PACKAGE_NAME"
 
       - name: Attach zip to GitHub release
         env:

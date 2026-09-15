@@ -125,3 +125,34 @@ The workflow validates that the release tag matches the plugin version before up
 ## Plugin icon
 
 The updater sends `assets/icon.svg` as the plugin icon for WordPress update/details screens. Replace that SVG with your preferred icon artwork and commit it to the repo.
+
+## Purge reliability (3.4.3)
+
+Public content changes capture existing public URLs before WordPress rewrites or deletes them, then collect final URLs at request shutdown. Shutdown **queues** the combined old/new permalinks, homepage/feed, posts page, author/taxonomy/post-type archives and thumbnail; it makes no Cloudflare HTTP calls. This includes scheduled publish and transitions to draft/private/trash. Repeated hooks merge within each site. Older modified-time options no longer suppress purges or record completion.
+
+**A functioning per-site cron runner is required for the first content purge and retries.** Edge-cached traffic never reaches WordPress. On multisite, a main-site-only cron runner is insufficient. Confirm your host executes due events for every enabled site through origin or WP-CLI, especially with `DISABLE_WP_CRON`. For example, an operator can run `wp cron event run --due-now --url=<site-url>` for each enabled site on a monitored schedule. Do not rely on a potentially cached HTTP cron URL. Network activation means installation changes behavior across the whole network.
+
+Manual purge actions attempt immediately. URL batches contain at most 30 URLs. Persistent, non-autoloaded jobs deduplicate identical pending payloads and retain only failed batches; edits during an in-flight request leave trailing work. A successful HTTP attempt with trailing work is reported as **pending**, not complete. Unique database inserts prevent concurrent slot overwrites, comparison-and-swap updates protect generations, and bounded fresh database reads avoid stale object-cache slot selection. Each origin request reconciles missing cron events from the durable jobs, including after scheduler failures or concurrent WP-Cron option writes.
+
+Transport errors, HTTP 408/429/5xx, malformed or unsuccessful 2xx responses retry; other 4xx errors are terminal. There are at most five attempts over 24 hours, with 60/120/240/480-second delays plus up to 30 seconds of jitter. `Retry-After` extends delays, with a shared-token cooldown for rate limiting or explicit server delay. An excessive delay expires the job without an early request. At most 100 jobs are pending per site; overflow is an explicit failure and never triggers a broader purge. A terminated attempt becomes eligible after a two-minute recovery lease. Site disabling or Zone ID changes cancel pending work. Jobs use current site credentials without storing tokens.
+
+The last 100 network log records are retained; admin shows the newest 25. Details include site/zone, status, error codes, attempt, pending/failure outcome and sampled URLs. Each record retains at most 25 summaries with ten 300-character URL samples each and total URL counts. Queries, fragments, URL credentials, raw API error text and tokens are omitted. Site settings expose only that site's records. Concurrent network log writes remain best-effort; Clear Log does not cancel jobs.
+
+### Compatibility and operational limits
+
+Canonical URL purges cannot prove freshness for all functional-query, header/cookie/device or Workers cache-key variants. Cloudflare also documents internal `PURGE` matching requirements for method-restricted cache rules. Existing rule expressions and public-page eligibility are unchanged. Review method restrictions and cache-key variants separately before changing live cache rules.
+
+Direct SQL edits, asynchronous changes in later requests, term renames, parent-page slug changes affecting descendants, global permalink changes, same-priority shutdown handlers registered later and unenumerated template dependencies can need separate invalidation. Fatal termination before shutdown or database outages can prevent queue persistence. Cron processing still needs sufficient runtime for the backlog and 25-second HTTP timeouts. Reliable purging does not make personalized pages, server-side tracking or forms with expiring nonces safe to share from cache.
+
+### Local verification and release
+
+From the repository (tests are excluded from installable packages):
+
+```sh
+php -l acquire-cloudflare-cache-manager.php
+php tests/purge-regression.php
+```
+
+The [integration harness](tests/integration/README.md) provisions disposable real WordPress/MariaDB standalone and multisite sites with blocked outbound requests and fake Cloudflare responses. It exercises HTTP/REST saves, request shutdown, persisted cron, concurrency and optional real Redis Object Cache. It does not certify the production theme, host cache, PHP/database versions, browser login flow or live Cloudflare behavior.
+
+The plugin header/class version is `3.4.3`, matching release tag `v3.4.3`. Release packages include only the plugin source, README, changelog and assets. Back up the installed plugin before updating; on multisite, replacement affects every site using that installation.

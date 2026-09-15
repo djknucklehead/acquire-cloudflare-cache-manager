@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.4.3
+- Capture old public URLs before WordPress can append trashed-slug suffixes, combine final URLs at shutdown, and defer content HTTP purges to per-site cron. Covers slug, author, taxonomy and thumbnail changes and transitions away from publish.
+- Replace modified-time suppression with bounded persistent, deduplicated purge jobs, partial-batch recovery, exponential backoff, Retry-After handling and per-site cron retries.
+- Repair missing cron events on origin requests and use unique inserts plus fresh database reads for queue slots to tolerate concurrent requests with or without persistent object caching.
+- Keep accepted attempts with trailing content pending until completion.
+- Add bounded site/zone/URL diagnostics, pending/retry outcomes and safe failure codes; restrict site-admin logs to their own site.
+- Run network purge jobs in the target site context and document cache-key limits, mandatory per-site cron, real local integration tests, network-wide installation scope and rollback.
+- Exclude development/test harnesses from release packages through an explicit file allowlist.
+
 ## 3.4.2
 - Replaced the aggressive ignore-all-query-strings cache key override with a safer marketing-parameter exclusion list for ad and analytics query strings.
 - Updated the cache key payload to Cloudflare's current Rulesets API shape for named query-string exclusions.

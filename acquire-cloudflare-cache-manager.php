@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with per-site purging, optional Cache Reserve and Smart Tiered Cache support, cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.4.2
+ * Version:     3.4.3
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.4.2';
+    const VERSION       = '3.4.3';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -43,12 +43,23 @@ final class Acquire_Cloudflare_Cache_Manager {
     /** @var array|null */
     private static $release_cache = null;
 
+    private static $pending_content = array();
+
     public static function init() {
         // Subsite-facing behavior. Each callback exits immediately unless the current site is enabled.
         add_action( 'send_headers', array( __CLASS__, 'send_logged_in_nocache_headers' ) );
         add_action( 'save_post', array( __CLASS__, 'purge_on_save_post' ), 10, 3 );
         add_action( 'future_to_publish', array( __CLASS__, 'purge_on_future_to_publish' ), 10, 1 );
         add_action( 'before_delete_post', array( __CLASS__, 'purge_on_before_delete_post' ), 10, 1 );
+
+        add_filter( 'wp_insert_post_empty_content', array( __CLASS__, 'capture_before_post_write' ), 10, 2 );
+        add_action( 'init', array( __CLASS__, 'recover_purge_schedule' ) );
+        add_action( 'pre_post_update', array( __CLASS__, 'capture_public_post' ), 10, 1 );
+        add_action( 'pre_delete_term', array( __CLASS__, 'capture_term_posts' ), 10, 2 );
+        add_action( 'delete_term_relationships', array( __CLASS__, 'capture_public_post' ), 10, 1 );
+        add_action( 'add_term_relationship', array( __CLASS__, 'capture_public_post' ), 10, 1 );
+        add_action( 'shutdown', array( __CLASS__, 'flush_content_purges' ), PHP_INT_MAX );
+        add_action( 'acfcm_retry_purge', array( __CLASS__, 'retry_purge' ), 10, 2 );
 
         // Admin UI and actions.
         add_action( 'admin_menu', array( __CLASS__, 'register_subsite_settings_page' ) );
@@ -370,6 +381,8 @@ final class Acquire_Cloudflare_Cache_Manager {
                 'success' => false,
                 'code'    => 0,
                 'message' => $response->get_error_message(),
+                'transport_error' => true,
+                'retryable' => true,
                 'body'    => '',
                 'json'    => null,
                 'result'  => null,
@@ -388,6 +401,8 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
 
         return array(
+            'retry_after' => self::retry_after_seconds( wp_remote_retrieve_header( $response, 'retry-after' ) ),
+            'retryable' => 408 === $code || 429 === $code || $code >= 500 || ( $code >= 200 && $code < 300 && ! $success ),
             'success' => $success,
             'code'    => $code,
             'message' => $message,
@@ -402,7 +417,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     }
 
     public static function purge_zone_everything( $zone_id ) {
-        return self::cloudflare_post( $zone_id, array( 'purge_everything' => true ), 25 );
+        return self::reliable_purge( $zone_id, array( 'purge_everything' => true ) );
     }
 
     public static function enable_smart_tiered_cache( $zone_id ) {
@@ -1373,7 +1388,7 @@ final class Acquire_Cloudflare_Cache_Manager {
         return $rule;
     }
 
-    public static function purge_urls_for_current_site( array $urls ) {
+    public static function purge_urls_for_current_site( array $urls, $defer = false ) {
         $zone_id = self::get_zone_id();
         $urls    = self::normalize_urls( $urls );
 
@@ -1383,9 +1398,218 @@ final class Acquire_Cloudflare_Cache_Manager {
 
         $results = array();
         foreach ( array_chunk( $urls, 30 ) as $batch ) {
-            $results[] = self::cloudflare_post( $zone_id, array( 'files' => array_values( $batch ) ), 20 );
+            $results[] = self::reliable_purge( $zone_id, array( 'files' => array_values( $batch ) ), $defer );
         }
         return $results;
+    }
+
+    // WP-Cron's shared option can lose an event during concurrent scheduling.
+    // Reconcile durable jobs on origin requests, including explicit cron requests.
+    private static function read_purge_jobs() {
+        global $wpdb;
+        $jobs = array();
+        $rows = $wpdb->get_results( "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'acfcm\_purge\_job\_%' LIMIT 100" );
+        foreach ( $rows as $row ) {
+            $job = maybe_unserialize( $row->option_value );
+            if ( is_array( $job ) && isset( $job['id'], $job['due'], $job['created'] ) ) {
+                $jobs[ $row->option_name ] = $job;
+            }
+        }
+        return $jobs;
+    }
+
+    public static function recover_purge_schedule() {
+        foreach ( self::read_purge_jobs() as $key => $job ) {
+            self::schedule_purge_job( $key, $job );
+        }
+    }
+
+    public static function retry_after_seconds( $value ) {
+        if ( is_numeric( $value ) ) {
+            return max( 0, (int) $value );
+        }
+        return $value ? max( 0, (int) strtotime( $value ) - time() ) : 0;
+    }
+
+    // add_option() uses an upsert and can overwrite a concurrent slot winner.
+    // A unique INSERT is required here; duplicate keys must never update a job.
+    private static function insert_purge_job( $key, array $job ) {
+        global $wpdb;
+        $inserted = 1 === $wpdb->query( $wpdb->prepare(
+            "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+            $key,
+            maybe_serialize( $job )
+        ) );
+        wp_cache_delete( $key, 'options' );
+        wp_cache_delete( 'notoptions', 'options' );
+        return $inserted;
+    }
+
+    // Compare-and-swap prevents concurrent saves/cron workers from losing newer work.
+    private static function replace_purge_job( $key, $old, $new = null ) {
+        global $wpdb;
+        if ( null === $new ) {
+            $sql = $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s AND BINARY option_value = %s", $key, maybe_serialize( $old ) );
+        } else {
+            $sql = $wpdb->prepare( "UPDATE {$wpdb->options} SET option_value = %s WHERE option_name = %s AND BINARY option_value = %s", maybe_serialize( $new ), $key, maybe_serialize( $old ) );
+        }
+        $changed = 1 === $wpdb->query( $sql );
+        wp_cache_delete( $key, 'options' );
+        wp_cache_delete( 'notoptions', 'options' );
+        return $changed;
+    }
+
+    private static function schedule_purge_job( $key, array $job ) {
+        $args = array( $key, $job['id'] );
+        if ( wp_next_scheduled( 'acfcm_retry_purge', $args ) ) {
+            return true;
+        }
+        return true === wp_schedule_single_event( max( time() + 1, min( $job['due'], $job['created'] + DAY_IN_SECONDS ) ), 'acfcm_retry_purge', $args, true );
+    }
+
+    public static function reliable_purge( $zone_id, array $payload, $defer = false ) {
+        if ( isset( $payload['files'] ) ) {
+            sort( $payload['files'], SORT_STRING );
+        }
+        $fingerprint = hash( 'sha256', $zone_id . wp_json_encode( $payload ) );
+        $result = array( 'success' => false, 'code' => 0, 'message' => 'Purge queue full or busy; request not sent.', 'urls' => $payload['files'] ?? array() );
+        // Fixed slots bound both storage and scheduled events to 100 jobs per site.
+        for ( $try = 0; $try < 100; $try++ ) {
+            $jobs = self::read_purge_jobs();
+            $key = null;
+            $old = false;
+            for ( $slot = 0; $slot < 100; $slot++ ) {
+                $candidate = 'acfcm_purge_job_' . $slot;
+                $existing = $jobs[ $candidate ] ?? false;
+                if ( $existing && $existing['fingerprint'] === $fingerprint ) {
+                    $key = $candidate;
+                    $old = $existing;
+                    break;
+                }
+                if ( ! $existing && null === $key ) {
+                    $key = $candidate;
+                }
+            }
+            if ( null === $key ) {
+                return $result;
+            }
+            if ( $old ) {
+                $job = $old;
+                // An edit during an HTTP request must survive that request's completion.
+                $job['generation'] = wp_generate_uuid4();
+                if ( ! self::replace_purge_job( $key, $old, $job ) ) {
+                    continue;
+                }
+            } else {
+                $job = array( 'id' => wp_generate_uuid4(), 'fingerprint' => $fingerprint, 'generation' => wp_generate_uuid4(), 'zone' => $zone_id, 'payload' => $payload, 'attempt' => 0, 'created' => time(), 'due' => time() );
+                wp_cache_delete( $key, 'options' );
+                wp_cache_delete( 'notoptions', 'options' );
+                if ( ! self::insert_purge_job( $key, $job ) ) {
+                    continue;
+                }
+            }
+            if ( ! self::schedule_purge_job( $key, $job ) ) {
+                $result['message'] = 'Unable to schedule purge recovery; pending job retained.';
+                return $result;
+            }
+            if ( $old || $defer ) {
+                $result['message'] = 'Matching purge already pending.';
+                $result['queued'] = true;
+                return $result;
+            }
+            return self::run_purge_job( $key, $job['id'] );
+        }
+        return $result;
+    }
+
+    public static function retry_purge( $key, $id ) {
+        if ( ! preg_match( '/^acfcm_purge_job_[0-9]{1,2}$/', $key ) ) {
+            return;
+        }
+        $result = self::run_purge_job( $key, $id );
+        if ( ! empty( $result['zone'] ) ) {
+            self::log_site_purge( 'purge_retry', $result['zone'], $result['urls'] ?? array(), array( $result ) );
+        }
+    }
+
+    private static function run_purge_job( $key, $id ) {
+        $job = get_option( $key );
+        $result = array( 'success' => false, 'code' => 0, 'message' => 'Purge no longer pending.' );
+        if ( ! $job || $job['id'] !== $id ) {
+            return $result;
+        }
+        $result['site_id'] = get_current_blog_id();
+        $result['zone'] = $job['zone'];
+        if ( ! self::is_site_enabled() || self::get_zone_id() !== $job['zone'] ) {
+            self::replace_purge_job( $key, $job );
+            wp_clear_scheduled_hook( 'acfcm_retry_purge', array( $key, $id ) );
+            $result['message'] = 'Purge cancelled: site disabled or zone changed.';
+            return $result;
+        }
+        $result['urls'] = $job['payload']['files'] ?? array();
+        $result['attempt'] = $job['attempt'];
+        // Shared-token cooldown also slows other sites after an account-level 429.
+        $cooldown_key = 'acfcm_purge_cooldown_' . substr( hash( 'sha256', self::get_cf_api_token() ), 0, 24 );
+        $due = max( $job['due'], (int) get_site_transient( $cooldown_key ) );
+        if ( time() - $job['created'] >= DAY_IN_SECONDS || $job['attempt'] >= 5 ) {
+            self::replace_purge_job( $key, $job );
+            wp_clear_scheduled_hook( 'acfcm_retry_purge', array( $key, $id ) );
+            $result['message'] = 'Purge exhausted (five attempts or 24-hour lifetime).';
+            return $result;
+        }
+        if ( $due > time() ) {
+            wp_clear_scheduled_hook( 'acfcm_retry_purge', array( $key, $id ) );
+            $job['due'] = $due;
+            $result['queued'] = self::schedule_purge_job( $key, $job );
+            $result['message'] = $result['queued'] ? 'Purge waiting for backoff or active request.' : 'Unable to schedule purge recovery.';
+            return $result;
+        }
+        $running = $job;
+        $running['attempt']++;
+        $running['due'] = time() + 120; // Crash recovery lease exceeds the HTTP timeout.
+        if ( ! self::replace_purge_job( $key, $job, $running ) ) {
+            $result['queued'] = true;
+            $result['message'] = 'Another worker claimed this purge.';
+            return $result;
+        }
+        wp_clear_scheduled_hook( 'acfcm_retry_purge', array( $key, $id ) );
+        if ( ! self::schedule_purge_job( $key, $running ) ) {
+            $result['message'] = 'Unable to schedule purge recovery; pending job retained.';
+            return $result;
+        }
+        $response = self::cloudflare_post( $job['zone'], $job['payload'], 25 );
+        $result = array_merge( $result, $response, array( 'attempt' => $running['attempt'] ) );
+        $retry = empty( $response['success'] ) && ! empty( $response['retryable'] );
+        if ( $retry && $running['attempt'] < 5 ) {
+            $delay = max( 60 * ( 2 ** ( $running['attempt'] - 1 ) ) + wp_rand( 0, 30 ), (int) ( $response['retry_after'] ?? 0 ) );
+            if ( 429 === (int) $response['code'] || ! empty( $response['retry_after'] ) ) {
+                set_site_transient( $cooldown_key, time() + $delay, $delay );
+            }
+            $next = $running;
+            $next['due'] = time() + $delay;
+            if ( self::replace_purge_job( $key, $running, $next ) ) {
+                wp_clear_scheduled_hook( 'acfcm_retry_purge', array( $key, $id ) );
+                $result['queued'] = self::schedule_purge_job( $key, $next );
+            } else {
+                $result['queued'] = true; // Newer edit remains behind the recovery lease.
+            }
+            $result['retry_at'] = $next['due'];
+        } else {
+            if ( self::replace_purge_job( $key, $running ) ) {
+                wp_clear_scheduled_hook( 'acfcm_retry_purge', array( $key, $id ) );
+            } else {
+                $result['queued'] = true;
+            }
+            if ( $retry ) {
+                $result['message'] = 'Retry attempts exhausted.';
+            }
+        }
+        if ( ! empty( $result['queued'] ) && ! empty( $result['success'] ) ) {
+            $result['accepted'] = true;
+            $result['success'] = false;
+        }
+        // Never retain raw API responses or credentials in persistent jobs/logs.
+        return $result;
     }
 
     public static function normalize_urls( array $urls ) {
@@ -1492,46 +1716,82 @@ final class Acquire_Cloudflare_Cache_Manager {
         return true;
     }
 
+    // This filter runs before core can rewrite a published slug with __trashed.
+    public static function capture_before_post_write( $empty, $postarr ) {
+        if ( ! empty( $postarr['ID'] ) ) {
+            self::capture_public_post( (int) $postarr['ID'] );
+        }
+        return $empty;
+    }
+
+    // Capture while the database still contains the public slug, author and terms.
+    public static function capture_public_post( $post_id ) {
+        if ( self::should_purge_post( $post_id ) ) {
+            self::queue_content_post( $post_id, self::post_related_urls( $post_id ) );
+        }
+    }
+
+    public static function capture_term_posts( $term_id, $taxonomy ) {
+        $ids = get_objects_in_term( $term_id, $taxonomy );
+        if ( ! is_wp_error( $ids ) ) {
+            foreach ( $ids as $id ) {
+                self::capture_public_post( $id );
+            }
+        }
+    }
+
+    private static function queue_content_post( $post_id, array $urls = array() ) {
+        $blog_id = get_current_blog_id();
+        $old = self::$pending_content[ $blog_id ][ $post_id ] ?? array();
+        self::$pending_content[ $blog_id ][ $post_id ] = self::normalize_urls( array_merge( $old, $urls ) );
+    }
+
     public static function purge_on_save_post( $post_id, $post, $update ) {
-        if ( ! self::should_purge_post( $post_id ) ) {
-            return;
+        if ( self::should_purge_post( $post_id ) ) {
+            self::queue_content_post( $post_id );
         }
-
-        $current_ts = (int) strtotime( get_post_modified_time( 'Y-m-d H:i:s', true, $post_id ) );
-        $last_ts    = (int) get_option( 'cloudflare_cache_timestamp_' . $post_id, 0 );
-
-        if ( $current_ts <= $last_ts ) {
-            return;
-        }
-
-        $urls    = self::post_related_urls( $post_id );
-        $results = self::purge_urls_for_current_site( $urls );
-
-        update_option( 'cloudflare_cache_timestamp_' . $post_id, $current_ts );
-        self::log_site_purge( 'content_change', self::get_zone_id(), $urls, $results );
     }
 
     public static function purge_on_future_to_publish( $post ) {
-        if ( empty( $post ) || empty( $post->ID ) || ! self::should_purge_post( $post->ID ) ) {
-            return;
+        if ( $post && ! empty( $post->ID ) ) {
+            self::purge_on_save_post( $post->ID, $post, true );
         }
-        $urls    = self::post_related_urls( $post->ID );
-        $results = self::purge_urls_for_current_site( $urls );
-        update_option( 'cloudflare_cache_timestamp_' . (int) $post->ID, (int) current_time( 'timestamp', true ) );
-        self::log_site_purge( 'scheduled_publish', self::get_zone_id(), $urls, $results );
     }
 
     public static function purge_on_before_delete_post( $post_id ) {
-        if ( ! self::is_content_auto_purge_enabled() ) {
-            return;
+        self::capture_public_post( $post_id );
+    }
+
+    public static function flush_content_purges() {
+        $pending = self::$pending_content;
+        self::$pending_content = array();
+        foreach ( $pending as $blog_id => $posts ) {
+            $switched = is_multisite() && (int) get_current_blog_id() !== (int) $blog_id;
+            if ( $switched ) {
+                switch_to_blog( $blog_id );
+            }
+            try {
+                if ( ! self::is_content_auto_purge_enabled() ) {
+                    continue;
+                }
+                $urls = array();
+                foreach ( $posts as $post_id => $old_urls ) {
+                    $urls = array_merge( $urls, $old_urls );
+                    if ( self::should_purge_post( $post_id ) ) {
+                        $urls = array_merge( $urls, self::post_related_urls( $post_id ) );
+                    }
+                }
+                $urls = self::normalize_urls( $urls );
+                if ( $urls ) {
+                    $results = self::purge_urls_for_current_site( $urls, true );
+                    self::log_site_purge( 'content_change', self::get_zone_id(), $urls, $results );
+                }
+            } finally {
+                if ( $switched ) {
+                    restore_current_blog();
+                }
+            }
         }
-        $post = get_post( $post_id );
-        if ( ! $post || 'publish' !== $post->post_status ) {
-            return;
-        }
-        $urls    = self::post_related_urls( $post_id );
-        $results = self::purge_urls_for_current_site( $urls );
-        self::log_site_purge( 'delete_post', self::get_zone_id(), $urls, $results );
     }
 
     /* -------------------------------------------------------------------------
@@ -1664,7 +1924,18 @@ final class Acquire_Cloudflare_Cache_Manager {
         $results = array();
 
         foreach ( $zones as $zone_id => $zone_data ) {
-            $result = self::purge_zone_everything( $zone_id );
+            $blog_id = (int) $zone_data['sites'][0]['blog_id'];
+            $switched = is_multisite() && (int) get_current_blog_id() !== $blog_id;
+            if ( $switched ) {
+                switch_to_blog( $blog_id );
+            }
+            try {
+                $result = self::purge_zone_everything( $zone_id );
+            } finally {
+                if ( $switched ) {
+                    restore_current_blog();
+                }
+            }
             $results[] = array(
                 'zone_id' => $zone_id,
                 'sites'   => wp_list_pluck( $zone_data['sites'], 'home_url' ),
@@ -1826,6 +2097,9 @@ final class Acquire_Cloudflare_Cache_Manager {
         $github_repo_editable  = ! defined( 'ACFCM_GITHUB_REPO' );
         $github_token_editable = ! defined( 'ACFCM_GITHUB_TOKEN' );
         $log             = get_site_option( 'acfcm_purge_log', array() );
+        $log = array_filter( (array) $log, static function ( $entry ) {
+            return isset( $entry['site_id'] ) && (int) $entry['site_id'] === (int) get_current_blog_id();
+        } );
         $save_settings_attrs = $can_manage_site_cloudflare ? array() : array( 'disabled' => 'disabled' );
         $save_rules_attrs = $can_manage_site_cloudflare ? array() : array( 'disabled' => 'disabled' );
         ?>
@@ -2012,14 +2286,14 @@ final class Acquire_Cloudflare_Cache_Manager {
                     <p>No purge log entries yet.</p>
                 <?php else : ?>
                     <table class="widefat striped">
-                        <thead><tr><th>Time</th><th>Reason</th><th>Zones</th><th>Status</th></tr></thead>
+                        <thead><tr><th>Time</th><th>Reason</th><th>Requests</th><th>Status</th></tr></thead>
                         <tbody>
                             <?php foreach ( array_slice( array_reverse( $log ), 0, 25 ) as $entry ) : ?>
                                 <tr>
                                     <td><?php echo esc_html( $entry['time'] ?? '' ); ?></td>
                                     <td><?php echo esc_html( $entry['reason'] ?? '' ); ?></td>
                                     <td><?php echo esc_html( (string) ( $entry['zone_count'] ?? 0 ) ); ?></td>
-                                    <td><?php echo esc_html( $entry['status'] ?? '' ); ?></td>
+                                    <td><?php echo esc_html( $entry['status'] ?? '' ); ?><?php if ( ! empty( $entry['details'] ) ) : ?><details><summary>Details</summary><pre style="white-space:pre-wrap"><?php echo esc_html( wp_json_encode( $entry['details'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) ); ?></pre></details><?php endif; ?></td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
@@ -2239,14 +2513,14 @@ final class Acquire_Cloudflare_Cache_Manager {
                 <p>No purge log entries yet.</p>
             <?php else : ?>
                 <table class="widefat striped">
-                    <thead><tr><th>Time</th><th>Reason</th><th>Zones</th><th>Status</th></tr></thead>
+                    <thead><tr><th>Time</th><th>Reason</th><th>Requests</th><th>Status</th></tr></thead>
                     <tbody>
                         <?php foreach ( array_slice( array_reverse( $log ), 0, 25 ) as $entry ) : ?>
                             <tr>
                                 <td><?php echo esc_html( $entry['time'] ?? '' ); ?></td>
                                 <td><?php echo esc_html( $entry['reason'] ?? '' ); ?></td>
                                 <td><?php echo esc_html( (string) ( $entry['zone_count'] ?? 0 ) ); ?></td>
-                                <td><?php echo esc_html( $entry['status'] ?? '' ); ?></td>
+                                <td><?php echo esc_html( $entry['status'] ?? '' ); ?><?php if ( ! empty( $entry['details'] ) ) : ?><details><summary>Details</summary><pre style="white-space:pre-wrap"><?php echo esc_html( wp_json_encode( $entry['details'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) ); ?></pre></details><?php endif; ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -2337,8 +2611,18 @@ final class Acquire_Cloudflare_Cache_Manager {
         check_admin_referer( 'acfcm_purge_network_site_' . $blog_id );
 
         $zone_id = self::get_zone_id( $blog_id );
-        $result  = self::purge_zone_everything( $zone_id );
-        self::log_network_purge( 'manual_single_site_' . $blog_id, array( array( 'zone_id' => $zone_id, 'sites' => array( $blog_id ), 'result' => $result ) ) );
+        $switched = is_multisite() && (int) get_current_blog_id() !== $blog_id;
+        if ( $switched ) {
+            switch_to_blog( $blog_id );
+        }
+        try {
+            $result = self::purge_zone_everything( $zone_id );
+        } finally {
+            if ( $switched ) {
+                restore_current_blog();
+            }
+        }
+        self::log_network_purge( 'manual_single_site_' . $blog_id, array( array( 'zone_id' => $zone_id, 'sites' => array( get_home_url( $blog_id, '/' ) ), 'result' => $result ) ) );
 
         wp_safe_redirect( add_query_arg( 'acfcm_notice', 'network_site', network_admin_url( 'settings.php?page=acfcm-network' ) ) );
         exit;
@@ -2573,22 +2857,74 @@ final class Acquire_Cloudflare_Cache_Manager {
      * Logging
      * ---------------------------------------------------------------------- */
 
-    public static function log_network_purge( $reason, array $results ) {
+    public static function log_url( $url ) {
+        $parts = wp_parse_url( (string) $url );
+        return ! empty( $parts['host'] ) ? substr( ( $parts['scheme'] ?? 'https' ) . '://' . $parts['host'] . ( $parts['path'] ?? '/' ), 0, 300 ) : '';
+    }
+
+    private static function purge_log_cause( array $result ) {
+        if ( ! empty( $result['accepted'] ) && ! empty( $result['queued'] ) ) {
+            return 'Attempt accepted; newer content still pending';
+        }
+        if ( ! empty( $result['success'] ) ) {
+            return 'Cloudflare accepted purge';
+        }
+        if ( ! empty( $result['transport_error'] ) ) {
+            return 'WordPress transport failure';
+        }
+        $code = (int) ( $result['code'] ?? 0 );
+        if ( $code ) {
+            return 'HTTP ' . $code . ( ! empty( $result['queued'] ) ? '; retry pending' : '; failed or exhausted' );
+        }
+        // Only internal fixed messages are safe; never copy API/transport text.
+        $message = (string) ( $result['message'] ?? '' );
+        $safe = array( 'Purge cancelled: site disabled or zone changed.', 'Purge queue full or busy; request not sent.', 'Unable to schedule purge recovery; pending job retained.', 'Matching purge already pending.', 'Purge exhausted (five attempts or 24-hour lifetime).', 'Purge waiting for backoff or active request.', 'Unable to schedule purge recovery.', 'Another worker claimed this purge.', 'Missing Cloudflare Zone ID or API token.', 'WordPress transport failure.', 'Retry attempts exhausted.' );
+        return in_array( $message, $safe, true ) ? $message : 'No request sent or transport failure';
+    }
+
+    public static function log_network_purge( $reason, array $results, $site_only = false ) {
         $ok = 0;
         $fail = 0;
+        $pending = 0;
         foreach ( $results as $result ) {
             if ( ! empty( $result['result']['success'] ) ) {
                 $ok++;
+            } elseif ( ! empty( $result['result']['queued'] ) ) {
+                $pending++;
             } else {
                 $fail++;
             }
         }
 
+        $details = array();
+        foreach ( array_slice( $results, 0, 25 ) as $item ) {
+            $r = $item['result'];
+            $codes = array();
+            foreach ( array_slice( $r['json']['errors'] ?? array(), 0, 5 ) as $error ) {
+                $codes[] = (int) ( $error['code'] ?? 0 );
+            }
+            $urls = $r['urls'] ?? array();
+            $details[] = array(
+                'site_id' => (int) ( $r['site_id'] ?? 0 ),
+                'zone' => sanitize_text_field( $item['zone_id'] ),
+                'sites' => array_map( array( __CLASS__, 'log_url' ), array_slice( $item['sites'] ?? array(), 0, 10 ) ),
+                'url_count' => count( $urls ),
+                'urls' => array_map( array( __CLASS__, 'log_url' ), array_slice( $urls, 0, 10 ) ),
+                'http' => (int) ( $r['code'] ?? 0 ),
+                'errors' => $codes,
+                'attempt' => (int) ( $r['attempt'] ?? 0 ),
+                'outcome' => ! empty( $r['success'] ) ? 'success' : ( ! empty( $r['queued'] ) ? 'pending' : 'failed' ),
+                'cause' => self::purge_log_cause( $r ),
+                'retry_at' => (int) ( $r['retry_at'] ?? 0 ),
+            );
+        }
         $entry = array(
+            'site_id'    => $site_only ? get_current_blog_id() : 0,
+            'details'    => $details,
             'time'       => current_time( 'mysql' ),
             'reason'     => sanitize_text_field( $reason ),
             'zone_count' => count( $results ),
-            'status'     => sprintf( '%d OK, %d failed', $ok, $fail ),
+            'status'     => sprintf( '%d OK, %d pending, %d failed', $ok, $pending, $fail ),
         );
 
         $log = get_site_option( 'acfcm_purge_log', array() );
@@ -2616,7 +2952,7 @@ final class Acquire_Cloudflare_Cache_Manager {
                 'result'  => array( 'success' => false, 'message' => 'No request sent.' ),
             );
         }
-        self::log_network_purge( $reason, $formatted );
+        self::log_network_purge( $reason, $formatted, true );
     }
 
     /* -------------------------------------------------------------------------
