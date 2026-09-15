@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with per-site purging, optional Cache Reserve and Smart Tiered Cache support, cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.4.3
+ * Version:     3.4.4
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.4.3';
+    const VERSION       = '3.4.4';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -44,6 +44,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     private static $release_cache = null;
 
     private static $pending_content = array();
+    private static $clearing_wpengine = false;
 
     public static function init() {
         // Subsite-facing behavior. Each callback exits immediately unless the current site is enabled.
@@ -1468,6 +1469,9 @@ final class Acquire_Cloudflare_Cache_Manager {
     }
 
     public static function reliable_purge( $zone_id, array $payload, $defer = false ) {
+        if ( self::$clearing_wpengine ) {
+            return array( 'success' => false, 'code' => 0, 'message' => 'WP Engine purge already in progress.' );
+        }
         if ( isset( $payload['files'] ) ) {
             sort( $payload['files'], SORT_STRING );
         }
@@ -1532,6 +1536,55 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
     }
 
+    /** Dispatch only this site's page-cache purge through the installed WP Engine transport. */
+    private static function purge_wpengine_page_cache( array $payload ) {
+        $failure = array( 'success' => false, 'code' => 0, 'retryable' => true, 'message' => 'WP Engine page-cache purge failed; Cloudflare not sent.' );
+        if ( defined( 'WPE_DISABLE_CACHE_PURGING' ) && WPE_DISABLE_CACHE_PURGING ) {
+            return $failure;
+        }
+        $home = wp_parse_url( home_url( '/' ) );
+        $host = strtolower( $home['host'] ?? '' );
+        if ( ! $host || ! preg_match( '/^[a-z0-9.-]+$/D', $host ) ) {
+            return $failure;
+        }
+        $paths = array();
+        if ( ! empty( $payload['purge_everything'] ) ) {
+            // A subdirectory network shares a host: retain the current site's path boundary.
+            $base = rtrim( $home['path'] ?? '', '/' );
+            $paths[] = $base ? '^' . preg_quote( $base, '/' ) . '(/.*|\\?.*)?$' : '.*';
+        } else {
+            foreach ( $payload['files'] ?? array() as $url ) {
+                $parts = wp_parse_url( $url );
+                // Never turn a CDN/attachment URL into a purge of an unrelated origin host.
+                if ( strtolower( $parts['host'] ?? '' ) !== $host ) {
+                    continue;
+                }
+                $path = $parts['path'] ?? '/';
+                $paths[] = '^' . preg_quote( $path, '/' ) . '(\\?.*)?$';
+            }
+        }
+        if ( ! $paths ) {
+            return array( 'success' => true ); // No URLs on this origin in this batch.
+        }
+        self::$clearing_wpengine = true;
+        try {
+            // Same transport used by WpeCommon::purge_varnish_cache, with explicit host/path scope.
+            // It reports dispatch errors, but cannot acknowledge edge-wide completion.
+            $response = WpeCommon::http_to_varnish( 'PURGE', $host, array(
+                'X-Purge-Host' => '^' . preg_quote( $host, '/' ) . '$',
+                'X-Purge-Path' => '(' . implode( '|', array_unique( $paths ) ) . ')',
+            ) );
+            if ( false === $response || is_wp_error( $response ) ) {
+                return $failure;
+            }
+            return array( 'success' => true );
+        } catch ( Throwable $error ) {
+            return $failure; // Do not expose platform exception text or credentials.
+        } finally {
+            self::$clearing_wpengine = false;
+        }
+    }
+
     private static function run_purge_job( $key, $id ) {
         $job = get_option( $key );
         $result = array( 'success' => false, 'code' => 0, 'message' => 'Purge no longer pending.' );
@@ -1577,7 +1630,29 @@ final class Acquire_Cloudflare_Cache_Manager {
             $result['message'] = 'Unable to schedule purge recovery; pending job retained.';
             return $result;
         }
-        $response = self::cloudflare_post( $job['zone'], $job['payload'], 25 );
+        $needs_origin = is_callable( array( 'WpeCommon', 'http_to_varnish' ) )
+            && ( $job['origin_generation'] ?? '' ) !== $job['generation'];
+        if ( $needs_origin ) {
+            $response = self::purge_wpengine_page_cache( $job['payload'] );
+            if ( ! empty( $response['success'] ) ) {
+                $next = $running;
+                $next['attempt'] = $job['attempt'];
+                $next['origin_generation'] = $job['generation'];
+                $next['due'] = time() + 5;
+                $result['message'] = 'WP Engine page-cache purge dispatched; Cloudflare queued.';
+                $result['queued'] = true;
+                $result['retry_at'] = $next['due'];
+                if ( self::replace_purge_job( $key, $running, $next ) ) {
+                    wp_clear_scheduled_hook( 'acfcm_retry_purge', array( $key, $id ) );
+                    if ( ! self::schedule_purge_job( $key, $next ) ) {
+                        $result['message'] = 'Unable to schedule purge recovery; pending job retained.';
+                    }
+                }
+                return $result;
+            }
+        } else {
+            $response = self::cloudflare_post( $job['zone'], $job['payload'], 25 );
+        }
         $result = array_merge( $result, $response, array( 'attempt' => $running['attempt'] ) );
         $retry = empty( $response['success'] ) && ! empty( $response['retryable'] );
         if ( $retry && $running['attempt'] < 5 ) {
@@ -1982,7 +2057,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     }
 
     public static function purge_network_after_external_cache_clear( $context = '' ) {
-        if ( ! self::network_external_cache_purge_enabled() ) {
+        if ( self::$clearing_wpengine || ! self::network_external_cache_purge_enabled() ) {
             return;
         }
         self::purge_all_enabled_zones( 'external_cache_clear' );
@@ -2878,7 +2953,7 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
         // Only internal fixed messages are safe; never copy API/transport text.
         $message = (string) ( $result['message'] ?? '' );
-        $safe = array( 'Purge cancelled: site disabled or zone changed.', 'Purge queue full or busy; request not sent.', 'Unable to schedule purge recovery; pending job retained.', 'Matching purge already pending.', 'Purge exhausted (five attempts or 24-hour lifetime).', 'Purge waiting for backoff or active request.', 'Unable to schedule purge recovery.', 'Another worker claimed this purge.', 'Missing Cloudflare Zone ID or API token.', 'WordPress transport failure.', 'Retry attempts exhausted.' );
+        $safe = array( 'WP Engine page-cache purge failed; Cloudflare not sent.', 'WP Engine page-cache purge dispatched; Cloudflare queued.', 'WP Engine purge already in progress.', 'Purge cancelled: site disabled or zone changed.', 'Purge queue full or busy; request not sent.', 'Unable to schedule purge recovery; pending job retained.', 'Matching purge already pending.', 'Purge exhausted (five attempts or 24-hour lifetime).', 'Purge waiting for backoff or active request.', 'Unable to schedule purge recovery.', 'Another worker claimed this purge.', 'Missing Cloudflare Zone ID or API token.', 'WordPress transport failure.', 'Retry attempts exhausted.' );
         return in_array( $message, $safe, true ) ? $message : 'No request sent or transport failure';
     }
 

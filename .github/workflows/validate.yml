@@ -23,7 +23,7 @@ jobs:
         run: php -l acquire-cloudflare-cache-manager.php
 
       - name: Purge regression tests
-        run: php tests/purge-regression.php
+        run: php tests/wpengine-purge-regression.php
 
       - name: Check plugin version consistency
         run: |

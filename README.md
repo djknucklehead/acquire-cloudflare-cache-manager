@@ -132,11 +132,21 @@ Public content changes capture existing public URLs before WordPress rewrites or
 
 **A functioning per-site cron runner is required for the first content purge and retries.** Edge-cached traffic never reaches WordPress. On multisite, a main-site-only cron runner is insufficient. Confirm your host executes due events for every enabled site through origin or WP-CLI, especially with `DISABLE_WP_CRON`. For example, an operator can run `wp cron event run --due-now --url=<site-url>` for each enabled site on a monitored schedule. Do not rely on a potentially cached HTTP cron URL. Network activation means installation changes behavior across the whole network.
 
-Manual purge actions attempt immediately. URL batches contain at most 30 URLs. Persistent, non-autoloaded jobs deduplicate identical pending payloads and retain only failed batches; edits during an in-flight request leave trailing work. A successful HTTP attempt with trailing work is reported as **pending**, not complete. Unique database inserts prevent concurrent slot overwrites, comparison-and-swap updates protect generations, and bounded fresh database reads avoid stale object-cache slot selection. Each origin request reconciles missing cron events from the durable jobs, including after scheduler failures or concurrent WP-Cron option writes.
+Manual purge actions start immediately. On WP Engine, the page-cache request starts first and Cloudflare waits in the queue as described below. URL batches contain at most 30 URLs. Persistent, non-autoloaded jobs deduplicate identical pending payloads and retain only failed batches; edits during an in-flight request leave trailing work. A successful HTTP attempt with trailing work is reported as **pending**, not complete. Unique database inserts prevent concurrent slot overwrites, comparison-and-swap updates protect generations, and bounded fresh database reads avoid stale object-cache slot selection. Each origin request reconciles missing cron events from the durable jobs, including after scheduler failures or concurrent WP-Cron option writes.
 
 Transport errors, HTTP 408/429/5xx, malformed or unsuccessful 2xx responses retry; other 4xx errors are terminal. There are at most five attempts over 24 hours, with 60/120/240/480-second delays plus up to 30 seconds of jitter. `Retry-After` extends delays, with a shared-token cooldown for rate limiting or explicit server delay. An excessive delay expires the job without an early request. At most 100 jobs are pending per site; overflow is an explicit failure and never triggers a broader purge. A terminated attempt becomes eligible after a two-minute recovery lease. Site disabling or Zone ID changes cancel pending work. Jobs use current site credentials without storing tokens.
 
 The last 100 network log records are retained; admin shows the newest 25. Details include site/zone, status, error codes, attempt, pending/failure outcome and sampled URLs. Each record retains at most 25 summaries with ten 300-character URL samples each and total URL counts. Queries, fragments, URL credentials, raw API error text and tokens are omitted. Site settings expose only that site's records. Concurrent network log writes remain best-effort; Clear Log does not cancel jobs.
+
+### WP Engine page cache (3.4.4)
+
+When the installed WP Engine MU plugin exposes `WpeCommon::http_to_varnish`, both saved-content jobs and manual purges automatically send a WP Engine page-cache purge first. This is the transport used by WP Engine's own PHP page-cache purge function. No API credentials or network-dashboard navigation are needed.
+
+The origin request targets the current site's hostname and affected URL paths, including old/new paths and query variants. A manual full purge clears that site's hostname/path scope in WP Engine; Cloudflare retains the selected zone-wide scope. On a subdirectory network, a full purge of the root site necessarily covers paths belonging to its subsites. External attachment/CDN hosts are not sent to WP Engine. This does not flush object cache, separate WP Engine network/CDN products, browser cache or a theme's generated assets.
+
+WP Engine's transport is asynchronous: successful dispatch is not confirmation of completed invalidation. The durable job waits at least five seconds and until its next eligible cron pass before sending Cloudflare. This reduces immediate stale refills but cannot guarantee propagation has finished. Saved edits queue both stages; a manual purge starts the origin stage immediately and reports pending. Reported origin failures retry with the existing limits and block Cloudflare. A newer edit repeats the origin stage. `WPE_DISABLE_CACHE_PURGING` is respected, and our own cache-clear hooks cannot trigger recursive network purges. Sites without the WP Engine transport retain their existing Cloudflare flow.
+
+See [WP Engine's cache documentation](https://wpengine.com/support/cache/) for the differences between page, object and network caches.
 
 ### Compatibility and operational limits
 
@@ -150,9 +160,9 @@ From the repository (tests are excluded from installable packages):
 
 ```sh
 php -l acquire-cloudflare-cache-manager.php
-php tests/purge-regression.php
+php tests/wpengine-purge-regression.php
 ```
 
 The [integration harness](tests/integration/README.md) provisions disposable real WordPress/MariaDB standalone and multisite sites with blocked outbound requests and fake Cloudflare responses. It exercises HTTP/REST saves, request shutdown, persisted cron, concurrency and optional real Redis Object Cache. It does not certify the production theme, host cache, PHP/database versions, browser login flow or live Cloudflare behavior.
 
-The plugin header/class version is `3.4.3`, matching release tag `v3.4.3`. Release packages include only the plugin source, README, changelog and assets. Back up the installed plugin before updating; on multisite, replacement affects every site using that installation.
+The plugin header/class version is `3.4.4`, matching release tag `v3.4.4`. Release packages include only the plugin source, README, changelog and assets. Back up the installed plugin before updating; on multisite, replacement affects every site using that installation.

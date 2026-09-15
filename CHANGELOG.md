@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.4.4
+- Automatically dispatch a scoped WP Engine page-cache purge before Cloudflare for content changes and manual purges when the WP Engine transport is available.
+- Persist a five-second minimum propagation interval; Cloudflare follows on a later eligible cron pass. Manual purges on WP Engine now report queued while waiting.
+- Retry reported WP Engine dispatch failures without sending Cloudflare first, and repeat the origin stage for newer edits while avoiding recursive external-cache hooks.
+- Scope WP Engine requests to the current site's hostname and affected paths, including old URLs and query variants; site-wide purges respect subdirectory boundaries. Object cache and separate WP Engine network/CDN cache products are not flushed.
+
 ## 3.4.3
 - Capture old public URLs before WordPress can append trashed-slug suffixes, combine final URLs at shutdown, and defer content HTTP purges to per-site cron. Covers slug, author, taxonomy and thumbnail changes and transitions away from publish.
 - Replace modified-time suppression with bounded persistent, deduplicated purge jobs, partial-batch recovery, exponential backoff, Retry-After handling and per-site cron retries.
