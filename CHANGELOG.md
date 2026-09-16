@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.5.0
+- Replace network maintenance purge loops with one durable, atomically claimed queue per WordPress network. Pace both origin dispatch and hostname-scoped Cloudflare purges from actual execution time, with no catch-up burst.
+- Coalesce plugin/theme/core update sessions using start/completion hooks, a renewable quiet period, and generation checks. New updates supersede pending edge work and refresh previously processed sites without stacking queues.
+- Add configurable 120-second spacing and 180-second quiet defaults, update-screen hold/finished controls, progress, pause/resume/cancel and explicit failed-target retry.
+- Preserve targeted content edits and explicit single-site manual purges. Shared zones retain every unique origin hostname; shared-host/subdirectory maintenance scopes fail for review rather than broadening to unrelated hosts.
+- Add bounded provider-failure backoff, worker/update lease recovery, and simulated-provider integration tests. Native WP Engine/SPM purges remain independent; no object-cache flushing is added.
+
 ## 3.4.4
 - Automatically dispatch a scoped WP Engine page-cache purge before Cloudflare for content changes and manual purges when the WP Engine transport is available.
 - Persist a five-second minimum propagation interval; Cloudflare follows on a later eligible cron pass. Manual purges on WP Engine now report queued while waiting.

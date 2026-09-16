@@ -16,7 +16,7 @@ for mode,port in [('single',18891),('multi',18892)]:
  state=base/(mode+'-state');state.mkdir()
  (state/'http.json').write_text('{"calls":[],"responses":[]}')
  mu=root/'wp-content/mu-plugins';mu.mkdir(exist_ok=True);shutil.copy(repo/'tests/integration/mock.php',mu/'mock.php')
- plugin=root/'wp-content/plugins/acquire-cloudflare-cache-manager';plugin.mkdir();(plugin/'acquire-cloudflare-cache-manager.php').symlink_to(repo/'acquire-cloudflare-cache-manager.php')
+ plugin=root/'wp-content/plugins/acquire-cloudflare-cache-manager';plugin.mkdir();(plugin/'acquire-cloudflare-cache-manager.php').symlink_to(repo/'acquire-cloudflare-cache-manager.php');(plugin/'includes').symlink_to(repo/'includes',target_is_directory=True)
  shutil.copy(repo/'tests/integration/endpoint.php',root/'harness.php')
  config="<?php\n"
  for k,v in {'DB_NAME':dbname,'DB_USER':'root','DB_PASSWORD':'','DB_HOST':'localhost:'+socket,'DB_CHARSET':'utf8mb4','DB_COLLATE':'','WP_HOME':f'http://127.0.0.1:{port}','WP_SITEURL':f'http://127.0.0.1:{port}','ACFCM_TEST_STATE':str(state),'WP_ENVIRONMENT_TYPE':'local'}.items():config+=f"define('{k}', {v!r});\n"

@@ -4,6 +4,7 @@ define('ABSPATH', __DIR__); define('DAY_IN_SECONDS', 86400); define('MINUTE_IN_S
 $GLOBALS['blog']=1; $GLOBALS['multi']=false; $GLOBALS['opts']=[]; $GLOBALS['net']=[]; $GLOBALS['events']=[]; $GLOBALS['posts']=[]; $GLOBALS['calls']=[]; $GLOBALS['responses']=[]; $GLOBALS['hooks']=[];
 function add_action($h,$f,$p=10,$n=1){$GLOBALS['hooks'][$h][]=[$f,$n];} function add_filter(...$a){} function register_activation_hook(...$a){}
 function fire($h,...$args){$before=count($GLOBALS['calls']);foreach($GLOBALS['hooks'][$h]??[] as [$f,$n])call_user_func_array($f,array_slice($args,0,$n));if($h==='shutdown'){if(count($GLOBALS['calls'])!==$before)throw new RuntimeException('Shutdown must not send HTTP');foreach(array_keys($GLOBALS['opts']) as $blog){$original=$GLOBALS['blog'];$GLOBALS['blog']=$blog;retry_now();$GLOBALS['blog']=$original;}}}
+function get_current_network_id(){return 1;}
 function get_current_blog_id(){return $GLOBALS['blog'];} function is_multisite(){return $GLOBALS['multi'];}
 function switch_to_blog($id){$GLOBALS['stack'][]=$GLOBALS['blog'];$GLOBALS['blog']=$id;} function restore_current_blog(){$GLOBALS['blog']=array_pop($GLOBALS['stack']);}
 function get_option($k,$d=false){return $GLOBALS['opts'][$GLOBALS['blog']][$k]??$d;}
@@ -26,7 +27,7 @@ function wp_remote_retrieve_response_code($r){return $r['code'];} function wp_re
 function get_post($id){return $GLOBALS['posts'][$GLOBALS['blog']][$id]??null;} function get_post_status($id){return get_post($id)->post_status??false;}
 function get_post_type($id){return get_post($id)->post_type??false;} function get_post_type_object($t){return (object)['public'=>$t==='post'];}
 function wp_is_post_autosave($id){return false;} function wp_is_post_revision($id){return false;}
-function home_url($p){return 'https://site'.$GLOBALS['blog'].'.test'.($GLOBALS['home_path']??'').$p;} function get_permalink($id){$p=get_post($id);return $p?home_url('/'.$p->post_name.'/'):false;}
+function home_url($p){return ($GLOBALS['home_urls'][$GLOBALS['blog']]??('https://site'.$GLOBALS['blog'].'.test')).($GLOBALS['home_path']??'').$p;} function get_permalink($id){$p=get_post($id);return $p?home_url('/'.$p->post_name.'/'):false;}
 function trailingslashit($v){return rtrim($v,'/').'/';} function get_post_type_archive_link($t){return home_url('/archive/');}
 function get_post_field($f,$id){return get_post($id)->$f??0;} function get_author_posts_url($id){return home_url('/author/'.$id.'/');}
 function get_object_taxonomies(...$a){return [(object)['name'=>'category']];} function get_the_terms($id,$t){return [(object)['term_id'=>get_post($id)->term??1]];}
@@ -61,7 +62,6 @@ reset_state();$GLOBALS['responses']=array_fill(0,101,['code'=>503,'body'=>'{}'])
 reset_state();$GLOBALS['responses']=array_fill(0,2,['code'=>503,'body'=>'{}']);P::purge_urls_for_current_site([home_url('/a')]);P::purge_urls_for_current_site([home_url('/b')]);$j=get_option('acfcm_purge_job_0');$j['due']=time()-1;update_option('acfcm_purge_job_0',$j);P::retry_purge('acfcm_purge_job_0',$j['id']);P::purge_urls_for_current_site([home_url('/b')]);check(count(jobs())===1&&count($GLOBALS['calls'])===3,'dedup survives a freed earlier queue slot');
 function wp_list_pluck($items,$field){return array_column($items,$field);}
 function get_sites($args){return [1,2];} function get_bloginfo($v){return 'Test site';} function get_home_url($id,$p){return 'https://site'.$id.'.test'.$p;}
-reset_state();$GLOBALS['multi']=true;switch_to_blog(2);update_option('cloudflare_zone_id','zone-2');update_option('cloudflare_api_token','second-secret');restore_current_blog();$GLOBALS['responses']=array_fill(0,2,['code'=>503,'body'=>'{}']);P::purge_all_enabled_zones();check(count($GLOBALS['calls'])===2&&$GLOBALS['calls'][1][0]===2,'network purge dispatch uses target site');switch_to_blog(2);check(count(jobs())===1,'network retry saved to target site');retry_now();restore_current_blog();check(get_current_blog_id()===1,'network retry restores caller context');
 check(P::retry_after_seconds(gmdate('D, d M Y H:i:s',time()+600).' GMT')>=599,'HTTP-date Retry-After parsed');
-$source=file_get_contents(dirname(__DIR__).'/acquire-cloudflare-cache-manager.php');preg_match('/Version:\s+(\S+)/',$source,$m);check($m[1]===P::VERSION&&'v'.P::VERSION==='v3.4.4','header constant and future release tag aligned');
+$source=file_get_contents(dirname(__DIR__).'/acquire-cloudflare-cache-manager.php');preg_match('/Version:\s+(\S+)/',$source,$m);check($m[1]===P::VERSION&&'v'.P::VERSION==='v3.5.0','header constant and future release tag aligned');
 echo "All purge regression tests passed.\n";

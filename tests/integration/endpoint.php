@@ -7,6 +7,35 @@ if ( ! empty( $input['site'] ) && is_multisite() ) { switch_to_blog( (int) $inpu
 $class = 'Acquire_Cloudflare_Cache_Manager';
 $out = array();
 switch ( $input['action'] ) {
+    case 'queue-update':
+        require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+        $type = $input['type'] ?? 'plugin';
+        $upgrader_class = array( 'plugin' => 'Plugin_Upgrader', 'theme' => 'Theme_Upgrader', 'core' => 'Core_Upgrader' )[$type];
+        $upgrader = new $upgrader_class();
+        apply_filters( 'upgrader_pre_download', false, 'synthetic-local-package', $upgrader, array( 'action' => 'update', 'type' => $type ) );
+        if ( ! empty( $input['sleep'] ) ) { usleep( $input['sleep'] * 1000000 ); }
+        if ( empty( $input['interrupt'] ) ) { do_action( 'upgrader_process_complete', $upgrader, array( 'action' => 'update', 'type' => $type ) ); }
+        $out = ACFCM_Network_Queue::state(); break;
+    case 'queue-state': $out = ACFCM_Network_Queue::state(); break;
+    case 'queue-enqueue': $out = $class::purge_all_enabled_zones( $input['reason'] ?? 'manual_network' ); break;
+    case 'queue-tick': ACFCM_Network_Queue::tick(); $out = ACFCM_Network_Queue::state(); break;
+    case 'queue-control': $out = ACFCM_Network_Queue::control( $input['control'] ); break;
+    case 'queue-reset':
+        if ( is_multisite() ) { switch_to_blog( get_main_site_id() ); }
+        delete_option( ACFCM_Network_Queue::KEY ); wp_clear_scheduled_hook( ACFCM_Network_Queue::HOOK );
+        if ( is_multisite() ) { restore_current_blog(); }
+        break;
+    case 'queue-advance':
+        $state = ACFCM_Network_Queue::state();
+        if ( empty( $input['only_due'] ) ) { $state['quiet_until']=time()-1; $state['updating']=array(); }
+        foreach ( array( 'next_origin', 'next_edge', 'hold_until' ) as $field ) { if ( empty( $input['only_due'] ) ) { $state[$field] = time() - 1; } }
+        if ( ! empty( $input['expire_lease'] ) && $state['lease'] ) { $state['lease']['until'] = time() - 1; }
+        foreach ( $state['targets'] as &$t ) { $t['due'] = time() - 10000; } unset( $t );
+        if ( is_multisite() ) { switch_to_blog( get_main_site_id() ); }
+        update_option( ACFCM_Network_Queue::KEY, $state, false );
+        wp_clear_scheduled_hook( ACFCM_Network_Queue::HOOK ); wp_schedule_single_event( time()-1, ACFCM_Network_Queue::HOOK );
+        if ( is_multisite() ) { restore_current_blog(); }
+        $out = $state; break;
     case 'newsite': $out['id'] = get_blog_id_from_url( '127.0.0.1:18892', '/second/' ) ?: wpmu_create_blog( '127.0.0.1:18892', '/second/', 'Second synthetic site', 1 ); break;
     case 'attachment': $out['id'] = wp_insert_attachment( array( 'post_title' => 'Synthetic image', 'post_mime_type' => 'image/jpeg', 'guid' => home_url( '/' . $input['name'] . '.jpg' ) ) ); break;
     case 'author': $out['id'] = wp_create_user( 'author' . wp_generate_password( 6, false ), 'fake-password', 'author' . wp_rand() . '@example.invalid' ); break;

@@ -22,3 +22,20 @@ add_filter( 'pre_schedule_event', function ( $pre, $event ) {
 }, 10, 2 );
 
 add_action( 'init', function () { if ( defined( 'DOING_CRON' ) && DOING_CRON && isset( $_GET['test_site'] ) && ( $_SERVER['HTTP_X_ACFCM_TEST'] ?? '' ) === 'disposable-local-only' && is_multisite() ) { switch_to_blog( (int) $_GET['test_site'] ); } }, 0 );
+
+// Optional simulated WP Engine transport, enabled only in disposable maintenance tests.
+if ( file_exists( ACFCM_TEST_STATE . '/maintenance-enabled' ) ) {
+    add_filter( 'home_url', function ( $url, $path ) { return 'https://site' . get_current_blog_id() . '.test/' . ltrim( (string) $path, '/' ); }, 10, 2 );
+    class WpeCommon {
+        public static function http_to_varnish( $method, $host, $headers ) {
+            $fp = fopen( ACFCM_TEST_STATE . '/origin.json', 'c+' ); flock( $fp, LOCK_EX );
+            $s = json_decode( stream_get_contents( $fp ), true ) ?: array( 'calls' => array(), 'responses' => array() );
+            $r = array_shift( $s['responses'] ) ?: array();
+            $s['calls'][] = array( 'site' => get_current_blog_id(), 'host' => $host, 'headers' => $headers, 'time' => microtime( true ) );
+            ftruncate( $fp, 0 ); rewind( $fp ); fwrite( $fp, json_encode( $s ) ); fflush( $fp ); flock( $fp, LOCK_UN ); fclose( $fp );
+            if ( ! empty( $r['sleep'] ) ) { usleep( $r['sleep'] * 1000000 ); }
+            if ( ! empty( $r['crash'] ) ) { exit; }
+            if ( ! empty( $r['fail'] ) ) { return new WP_Error( 'synthetic', 'Synthetic origin failure' ); }
+        }
+    }
+}

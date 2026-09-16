@@ -6,7 +6,7 @@ root=pathlib.Path(a.source);main=root/'acquire-cloudflare-cache-manager.php';dat
 header=re.search(r'Version:\s+(\S+)',data)[1];constant=re.search(r"const VERSION\s*=\s*'([^']+)'",data)[1]
 assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',header), 'Expected X.Y.Z version'
 assert header==constant and a.tag=='v'+header, 'Version/tag mismatch'
-files=[main,root/'README.md',root/'CHANGELOG.md']+sorted((root/'assets').rglob('*'))
+files=[main,root/'README.md',root/'CHANGELOG.md']+sorted((root/'assets').rglob('*'))+sorted((root/'includes').rglob('*.php'))
 files=[f for f in files if f.is_file()]
 out=pathlib.Path(a.output);out.parent.mkdir(parents=True,exist_ok=True)
 with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:

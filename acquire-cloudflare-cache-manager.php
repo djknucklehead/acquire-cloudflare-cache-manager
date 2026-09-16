@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with per-site purging, optional Cache Reserve and Smart Tiered Cache support, cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.4.4
+ * Version:     3.5.0
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -16,10 +16,12 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+require_once __DIR__ . '/includes/class-acfcm-network-queue.php';
+
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.4.4';
+    const VERSION       = '3.5.0';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -47,6 +49,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     private static $clearing_wpengine = false;
 
     public static function init() {
+        ACFCM_Network_Queue::init();
         // Subsite-facing behavior. Each callback exits immediately unless the current site is enabled.
         add_action( 'send_headers', array( __CLASS__, 'send_logged_in_nocache_headers' ) );
         add_action( 'save_post', array( __CLASS__, 'purge_on_save_post' ), 10, 3 );
@@ -1536,6 +1539,14 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
     }
 
+    public static function is_clearing_wpengine() { return self::$clearing_wpengine; }
+
+    public static function maintenance_origin_purge() {
+        return is_callable( array( 'WpeCommon', 'http_to_varnish' ) )
+            ? self::purge_wpengine_page_cache( array( 'purge_everything' => true ) )
+            : array( 'success' => true );
+    }
+
     /** Dispatch only this site's page-cache purge through the installed WP Engine transport. */
     private static function purge_wpengine_page_cache( array $payload ) {
         $failure = array( 'success' => false, 'code' => 0, 'retryable' => true, 'message' => 'WP Engine page-cache purge failed; Cloudflare not sent.' );
@@ -1879,6 +1890,7 @@ final class Acquire_Cloudflare_Cache_Manager {
         if ( is_multisite() ) {
             $blog_ids = get_sites( array(
                 'number'   => 0,
+                'network_id' => get_current_network_id(),
                 'fields'   => 'ids',
                 'archived' => 0,
                 'deleted'  => 0,
@@ -1984,48 +1996,7 @@ final class Acquire_Cloudflare_Cache_Manager {
     }
 
     public static function purge_all_enabled_zones( $reason = 'manual_network' ) {
-        $lock_key = 'acfcm_network_purge_lock';
-        if ( get_site_transient( $lock_key ) ) {
-            return array(
-                'locked'  => true,
-                'reason'  => $reason,
-                'results' => array(),
-            );
-        }
-
-        set_site_transient( $lock_key, 1, 2 * MINUTE_IN_SECONDS );
-
-        $zones   = self::get_enabled_zones();
-        $results = array();
-
-        foreach ( $zones as $zone_id => $zone_data ) {
-            $blog_id = (int) $zone_data['sites'][0]['blog_id'];
-            $switched = is_multisite() && (int) get_current_blog_id() !== $blog_id;
-            if ( $switched ) {
-                switch_to_blog( $blog_id );
-            }
-            try {
-                $result = self::purge_zone_everything( $zone_id );
-            } finally {
-                if ( $switched ) {
-                    restore_current_blog();
-                }
-            }
-            $results[] = array(
-                'zone_id' => $zone_id,
-                'sites'   => wp_list_pluck( $zone_data['sites'], 'home_url' ),
-                'result'  => $result,
-            );
-        }
-
-        delete_site_transient( $lock_key );
-        self::log_network_purge( $reason, $results );
-
-        return array(
-            'locked'  => false,
-            'reason'  => $reason,
-            'results' => $results,
-        );
+        return ACFCM_Network_Queue::enqueue( $reason );
     }
 
     public static function purge_network_after_wp_update( $upgrader, $hook_extra ) {
@@ -2052,8 +2023,12 @@ final class Acquire_Cloudflare_Cache_Manager {
             return;
         }
 
-        // Automatic updates can include mixed core/theme/plugin/translation work. One deduped purge is enough.
-        self::purge_all_enabled_zones( 'automatic_updates_complete' );
+        foreach ( self::network_update_types() as $type ) {
+            if ( ! empty( $update_results[ $type ] ) ) {
+                self::purge_all_enabled_zones( 'automatic_updates_complete' );
+                break;
+            }
+        }
     }
 
     public static function purge_network_after_external_cache_clear( $context = '' ) {
@@ -2180,6 +2155,7 @@ final class Acquire_Cloudflare_Cache_Manager {
         ?>
         <div class="wrap">
             <h1>Cloudflare Cache</h1>
+            <?php if ( ! is_multisite() ) { ACFCM_Network_Queue::render(); } ?>
 
             <?php if ( $is_multisite ) : ?>
                 <p>This subsite is currently <strong><?php echo $enabled ? 'enabled' : 'disabled'; ?></strong> for Cloudflare purge behavior.</p>
@@ -2475,7 +2451,7 @@ final class Acquire_Cloudflare_Cache_Manager {
                     </tr>
                     <tr>
                         <th scope="row">Auto-purge After Updates</th>
-                        <td><label><input type="checkbox" name="acfcm_network_auto_purge" value="1" <?php checked( self::network_auto_purge_enabled() ); ?>> Purge all enabled Cloudflare zones after selected WordPress updates</label></td>
+                        <td><label><input type="checkbox" name="acfcm_network_auto_purge" value="1" <?php checked( self::network_auto_purge_enabled() ); ?>> Queue paced maintenance purges after selected WordPress updates</label></td>
                     </tr>
                     <tr>
                         <th scope="row">Update Types</th>
@@ -2511,9 +2487,10 @@ final class Acquire_Cloudflare_Cache_Manager {
             </form>
 
             <hr>
+            <?php ACFCM_Network_Queue::render(); ?>
             <h2>Network Purge</h2>
             <p>
-                <a class="button button-primary" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_purge_network_everything' ), 'acfcm_purge_network_everything' ) ); ?>" onclick="return confirm('Purge EVERYTHING for every enabled Cloudflare zone on this network?');">Purge All Enabled Zones</a>
+                <a class="button button-primary" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_purge_network_everything' ), 'acfcm_purge_network_everything' ) ); ?>" onclick="return confirm('Queue paced cache purges for enabled sites on this network?');">Queue Maintenance Purge</a>
             </p>
 
             <hr>
@@ -2672,7 +2649,7 @@ final class Acquire_Cloudflare_Cache_Manager {
         check_admin_referer( 'acfcm_purge_network_everything' );
 
         $summary = self::purge_all_enabled_zones( 'manual_network' );
-        $notice  = ! empty( $summary['locked'] ) ? 'network_locked' : 'network_all';
+        $notice  = empty( $summary['queued'] ) ? 'network_locked' : 'network_all';
 
         wp_safe_redirect( add_query_arg( 'acfcm_notice', $notice, network_admin_url( 'settings.php?page=acfcm-network' ) ) );
         exit;
@@ -2878,8 +2855,8 @@ final class Acquire_Cloudflare_Cache_Manager {
         $messages = array(
             'home'           => 'Cloudflare homepage purge requested.',
             'site_all'       => 'Cloudflare purge everything requested for this site.',
-            'network_all'    => 'Cloudflare purge everything requested for all enabled zones.',
-            'network_locked' => 'A network purge is already running or just completed. Try again shortly if needed.',
+            'network_all'    => 'Paced maintenance purge queued for enabled sites. Review progress below.',
+            'network_locked' => 'Maintenance request could not be queued. Check the queue inventory and try again.',
             'network_site'   => 'Cloudflare purge everything requested for that site zone.',
             'cache_rules'    => 'Cloudflare recommended cache rules installed or updated.',
             'cache_rules_warning' => 'Cloudflare recommended cache rules installed or updated, but one related setting needs attention.',
@@ -2899,7 +2876,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             if ( 'hardening_rules' === $notice && ! empty( $_GET['acfcm_info'] ) ) {
                 $message .= ' ' . self::short_notice_message( wp_unslash( $_GET['acfcm_info'] ) );
             }
-            $notice_class = in_array( $notice, array( 'cache_rules_warning', 'cache_security_rules_warning' ), true ) ? 'notice-warning' : 'notice-success';
+            $notice_class = in_array( $notice, array( 'cache_rules_warning', 'cache_security_rules_warning', 'network_locked' ), true ) ? 'notice-warning' : 'notice-success';
             echo '<div class="notice ' . esc_attr( $notice_class ) . ' is-dismissible"><p>' . esc_html( $message ) . '</p></div>';
         }
 

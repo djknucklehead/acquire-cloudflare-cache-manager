@@ -57,3 +57,9 @@ The loopback harness checks a test-only header and sets a synthetic administrato
 ## Cleanup
 
 Stop only the PHP server processes/workers, MariaDB and Redis processes you started (record their PIDs). Once stopped, remove the fresh disposable directories if desired. Do not use broad `killall`, global cache flushes, shared database drops or system-service commands. The local verification report records process shutdown separately from test results.
+
+## Maintenance coordinator suite
+
+After the ordinary suite, run `python3 tests/integration/maintenance.py /tmp/acfcm-fresh single` and repeat with `multi`. This enables a fixture-only WP Engine transport and synthetic home hostnames, locks provider log files, and exercises the real SQL CAS, main-site cron, and separate PHP worker requests. Provider calls never leave the fixture. Update-session tests invoke registered start/completion hooks using actual WordPress upgrader objects, without downloading/installing any updates.
+
+Many tests explicitly advance persisted timestamps (quiet periods, pacing, retry times and crashed leases) to avoid long sleeps. They assert that subsequent unadvanced worker calls do not dispatch again. This proves scheduling/state invariants under synthetic time advancement, not a real-host capacity limit. HTTP transports simulate in-flight delay, failure and termination. Controls and update events are tested across fresh requests; ordinary content jobs also execute through real `wp-cron.php` while maintenance is held. The integration runner used for this review stopped all owned PHP/MariaDB processes afterward.
