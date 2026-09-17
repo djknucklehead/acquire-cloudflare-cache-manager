@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.6.0
+
+- Replace destructive hardening-rule description matching with read-only adoption of the verified September 17 defense rollout, including all consolidated blocks and retained policies.
+- Add explicit Free-plan baseline onboarding using create-only requests, quota/ownership preflight, fresh drift checks, per-zone installer locking and readback verification. Partial or uncertain failures stop without automatic rollback or retry.
+- Preserve bettertomorrowinamerica.com's all-path rate policy and blackbearpac.com's legacy rule reference. Legacy recommendations are review-only; no automatic rule splitting, consolidation or policy replacement.
+- Replace legacy hardening choices with a defense verification/onboarding control; explain narrow rate exceptions, ownership and manual conflict review. Combined cache/defense installation checks defenses first.
+- No automatic firewall changes on upgrades, content edits or purges. Existing targeted WP Engine-before-Cloudflare purges and paced maintenance queues are unchanged.
+- Add saved rollout fixtures, mocked API regressions, local expression/trace checks and standalone/multisite WordPress integration coverage. No production changes are part of this candidate.
+
+
 ## 3.5.0
 - Replace network maintenance purge loops with one durable, atomically claimed queue per WordPress network. Pace both origin dispatch and hostname-scoped Cloudflare purges from actual execution time, with no catch-up burst.
 - Coalesce plugin/theme/core update sessions using start/completion hooks, a renewable quiet period, and generation checks. New updates supersede pending edge work and refresh previously processed sites without stacking queues.

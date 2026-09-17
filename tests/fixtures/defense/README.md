@@ -1,0 +1,1 @@
+Fixtures copied from the verified September 17, 2026 Acquire Digital defense rollout. rollout.json normalizes after custom/rate and phase-name keys; before snapshots remain intact. Production artifacts were not modified. Rule IDs and zone IDs are identifiers, not credentials. Never use these fixtures to write live rules.

@@ -22,7 +22,7 @@ function wp_clear_scheduled_hook($h,$a){unset($GLOBALS['events'][event_key($h,$a
 function wp_json_encode($v,$flags=0){return json_encode($v,$flags);} function esc_url_raw($v){return filter_var($v,FILTER_VALIDATE_URL)?$v:'';}
 function sanitize_text_field($v){return strip_tags($v);} function wp_parse_url($v,$component=-1){return parse_url($v,$component);} function current_time($v){return date('Y-m-d H:i:s');}
 class WP_Error{function get_error_message(){return 'secret-test-token';}} function is_wp_error($v){return $v instanceof WP_Error;}
-function wp_remote_request($url,$args){$GLOBALS['calls'][]=[$GLOBALS['blog'],$url,json_decode($args['body'],true)];if(isset($GLOBALS['during_http'])){$f=$GLOBALS['during_http'];unset($GLOBALS['during_http']);$f();}return array_shift($GLOBALS['responses'])??['code'=>200,'body'=>'{"success":true}'];}
+function wp_remote_request($url,$args){if(isset($GLOBALS['defense_mock']))return ($GLOBALS['defense_mock'])($url,$args);$GLOBALS['calls'][]=[$GLOBALS['blog'],$url,json_decode($args['body'],true)];if(isset($GLOBALS['during_http'])){$f=$GLOBALS['during_http'];unset($GLOBALS['during_http']);$f();}return array_shift($GLOBALS['responses'])??['code'=>200,'body'=>'{"success":true}'];}
 function wp_remote_retrieve_response_code($r){return $r['code'];} function wp_remote_retrieve_body($r){return $r['body'];} function wp_remote_retrieve_response_message($r){return 'Remote response';} function wp_remote_retrieve_header($r,$k){return $r[$k]??'';}
 function get_post($id){return $GLOBALS['posts'][$GLOBALS['blog']][$id]??null;} function get_post_status($id){return get_post($id)->post_status??false;}
 function get_post_type($id){return get_post($id)->post_type??false;} function get_post_type_object($t){return (object)['public'=>$t==='post'];}
@@ -63,5 +63,5 @@ reset_state();$GLOBALS['responses']=array_fill(0,2,['code'=>503,'body'=>'{}']);P
 function wp_list_pluck($items,$field){return array_column($items,$field);}
 function get_sites($args){return [1,2];} function get_bloginfo($v){return 'Test site';} function get_home_url($id,$p){return 'https://site'.$id.'.test'.$p;}
 check(P::retry_after_seconds(gmdate('D, d M Y H:i:s',time()+600).' GMT')>=599,'HTTP-date Retry-After parsed');
-$source=file_get_contents(dirname(__DIR__).'/acquire-cloudflare-cache-manager.php');preg_match('/Version:\s+(\S+)/',$source,$m);check($m[1]===P::VERSION&&'v'.P::VERSION==='v3.5.0','header constant and future release tag aligned');
+$source=file_get_contents(dirname(__DIR__).'/acquire-cloudflare-cache-manager.php');preg_match('/Version:\s+(\S+)/',$source,$m);check($m[1]===P::VERSION&&'v'.P::VERSION==='v3.6.0','header constant and future release tag aligned');
 echo "All purge regression tests passed.\n";

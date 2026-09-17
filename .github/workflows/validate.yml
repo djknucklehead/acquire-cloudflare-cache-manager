@@ -26,6 +26,11 @@ jobs:
         run: |
           php tests/wpengine-purge-regression.php
           php tests/network-queue-regression.php
+          php tests/defense-regression.php
+          python3 tests/defense-expressions.py
+          php -l includes/class-acfcm-defense.php
+          php -l includes/defense-baseline.php
+          php -l includes/defense-adoptions.php
           php -l includes/class-acfcm-network-queue.php
 
       - name: Check plugin version consistency

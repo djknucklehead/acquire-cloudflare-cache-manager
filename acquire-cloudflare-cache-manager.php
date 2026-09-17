@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with per-site purging, optional Cache Reserve and Smart Tiered Cache support, cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.5.0
+ * Version:     3.6.0
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -17,11 +17,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 require_once __DIR__ . '/includes/class-acfcm-network-queue.php';
+require_once __DIR__ . '/includes/class-acfcm-defense.php';
 
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.5.0';
+    const VERSION       = '3.6.0';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -897,6 +898,7 @@ final class Acquire_Cloudflare_Cache_Manager {
 
     public static function hardening_options_from_request( array $request ) {
         return array(
+            'defense_baseline'       => ! empty( $request['acfcm_hardening_defense_baseline'] ),
             'wordpress_probes'       => ! empty( $request['acfcm_hardening_wordpress_probes'] ),
             'xmlrpc'                 => ! empty( $request['acfcm_hardening_xmlrpc'] ),
             'legal_query_challenge'  => ! empty( $request['acfcm_hardening_legal_query_challenge'] ),
@@ -914,17 +916,13 @@ final class Acquire_Cloudflare_Cache_Manager {
     }
 
     public static function default_network_site_security_options() {
-        return array(
-            'wordpress_probes'       => true,
-            'xmlrpc'                 => false,
-            'legal_query_challenge'  => false,
-            'legal_query_rate_limit' => false,
-        );
+        return array( 'defense_baseline' => true );
     }
 
     public static function install_cache_and_default_security_rules( $zone_id ) {
-        $cache_result = self::install_recommended_cache_rules( $zone_id );
         $security_result = self::install_recommended_hardening_rules( $zone_id, self::default_network_site_security_options() );
+        if ( empty( $security_result['success'] ) ) { return $security_result; }
+        $cache_result = self::install_recommended_cache_rules( $zone_id );
 
         return self::combine_cache_security_results( $cache_result, $security_result );
     }
@@ -974,30 +972,14 @@ final class Acquire_Cloudflare_Cache_Manager {
             return array(
                 'success' => false,
                 'code'    => 0,
-                'message' => 'Select at least one hardening rule to install or update.',
+                'message' => 'Select defense baseline verification/onboarding. Legacy recommendations are review-only.',
                 'body'    => '',
                 'json'    => null,
                 'result'  => null,
             );
         }
 
-        $results = array();
-        $waf_rules = self::recommended_hardening_waf_rules( $options );
-        if ( ! empty( $waf_rules ) ) {
-            $results['WAF custom rules'] = self::upsert_hardening_ruleset(
-                $zone_id,
-                self::WAF_CUSTOM_RULE_PHASE,
-                'Cloudflare WAF Custom Rules',
-                'WAF custom rules managed by Acquire Cloudflare Cache Manager.',
-                $waf_rules
-            );
-        }
-
-        if ( ! empty( $options['legal_query_rate_limit'] ) ) {
-            $results['Rate limiting rules'] = self::install_hardening_rate_limit_rules( $zone_id, $options );
-        }
-
-        return self::combine_hardening_results( $results );
+        return ACFCM_Defense::install( $zone_id, $options );
     }
 
     public static function install_recommended_hardening_rules_for_enabled_zones( array $options ) {
@@ -1005,7 +987,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             return array(
                 'success' => false,
                 'code'    => 0,
-                'message' => 'Select at least one hardening rule to install or update.',
+                'message' => 'Select defense baseline verification/onboarding. Legacy recommendations are review-only.',
                 'body'    => '',
                 'json'    => null,
                 'result'  => null,
@@ -1027,15 +1009,11 @@ final class Acquire_Cloudflare_Cache_Manager {
         $ok = 0;
         $failed = 0;
         $messages = array();
-        $fallback_used = false;
 
         foreach ( $zones as $zone_id => $zone_data ) {
             $result = self::install_recommended_hardening_rules( $zone_id, $options );
             if ( ! empty( $result['success'] ) ) {
                 $ok++;
-                if ( ! empty( $result['message'] ) && false !== stripos( (string) $result['message'], 'path-only rate limiting fallback' ) ) {
-                    $fallback_used = true;
-                }
                 continue;
             }
 
@@ -1045,10 +1023,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             }
         }
 
-        $message = sprintf( '%d zone(s) updated, %d failed.', $ok, $failed );
-        if ( $fallback_used ) {
-            $message .= ' Rate limiting used the path-only fallback on at least one zone because Cloudflare does not entitle that zone to inspect query strings in rate limiting rules.';
-        }
+        $message = sprintf( '%d zone(s) verified/onboarded, %d need review.', $ok, $failed );
         if ( ! empty( $messages ) ) {
             $message .= ' ' . implode( ' ', array_slice( $messages, 0, 3 ) );
         }
@@ -1063,79 +1038,20 @@ final class Acquire_Cloudflare_Cache_Manager {
         );
     }
 
+    // Compatibility entry point for old callers: review only, never replace a ruleset.
     public static function upsert_hardening_ruleset( $zone_id, $phase, $ruleset_name, $ruleset_description, array $rules ) {
-        $entry = self::cloudflare_request(
-            'GET',
-            $zone_id,
-            'rulesets/phases/' . $phase . '/entrypoint',
-            null,
-            20
-        );
-
-        if ( ! $entry['success'] ) {
-            if ( 404 === (int) $entry['code'] ) {
-                return self::cloudflare_request(
-                    'POST',
-                    $zone_id,
-                    'rulesets',
-                    array(
-                        'kind'        => 'zone',
-                        'name'        => $ruleset_name,
-                        'phase'       => $phase,
-                        'description' => $ruleset_description,
-                        'rules'       => $rules,
-                    ),
-                    30
-                );
-            }
-
-            return $entry;
+        $entry = self::cloudflare_request( 'GET', $zone_id, 'rulesets/phases/' . $phase . '/entrypoint', null, 20 );
+        if ( empty( $entry['success'] ) ) { return ACFCM_Defense::result( false, 'Legacy policy could not be verified. Use explicit defense baseline onboarding or review the zone in Cloudflare.' ); }
+        try {
+            self::merge_hardening_rules( $entry['result']['rules'] ?? array(), $rules );
+        } catch ( RuntimeException $e ) {
+            return ACFCM_Defense::result( false, $e->getMessage() );
         }
-
-        $ruleset = is_array( $entry['result'] ) ? $entry['result'] : array();
-        $ruleset_id = isset( $ruleset['id'] ) ? (string) $ruleset['id'] : '';
-        $existing_rules = isset( $ruleset['rules'] ) && is_array( $ruleset['rules'] ) ? $ruleset['rules'] : array();
-        $merged_rules = self::merge_hardening_rules( $existing_rules, $rules );
-
-        $payload = array(
-            'kind'        => isset( $ruleset['kind'] ) ? (string) $ruleset['kind'] : 'zone',
-            'name'        => isset( $ruleset['name'] ) ? (string) $ruleset['name'] : $ruleset_name,
-            'phase'       => $phase,
-            'description' => isset( $ruleset['description'] ) ? (string) $ruleset['description'] : $ruleset_description,
-            'rules'       => $merged_rules,
-        );
-
-        $path = $ruleset_id ? 'rulesets/' . rawurlencode( $ruleset_id ) : 'rulesets/phases/' . $phase . '/entrypoint';
-
-        return self::cloudflare_request( 'PUT', $zone_id, $path, $payload, 30 );
+        return ACFCM_Defense::result( true, 'Verified existing legacy rules without firewall writes.' );
     }
 
     public static function install_hardening_rate_limit_rules( $zone_id, array $options ) {
-        $result = self::upsert_hardening_ruleset(
-            $zone_id,
-            self::RATE_LIMIT_RULE_PHASE,
-            'Cloudflare Rate Limiting Rules',
-            'Rate limiting rules managed by Acquire Cloudflare Cache Manager.',
-            self::recommended_hardening_rate_limit_rules( $options, true )
-        );
-
-        if ( ! empty( $result['success'] ) || ! self::is_rate_limit_query_field_entitlement_error( $result ) ) {
-            return $result;
-        }
-
-        $fallback_result = self::upsert_hardening_ruleset(
-            $zone_id,
-            self::RATE_LIMIT_RULE_PHASE,
-            'Cloudflare Rate Limiting Rules',
-            'Rate limiting rules managed by Acquire Cloudflare Cache Manager.',
-            self::recommended_hardening_rate_limit_rules( $options, false )
-        );
-
-        if ( ! empty( $fallback_result['success'] ) ) {
-            $fallback_result['message'] = 'OK. Used the path-only rate limiting fallback because Cloudflare does not entitle this zone to inspect query strings in rate limiting rules.';
-        }
-
-        return $fallback_result;
+        return self::install_recommended_hardening_rules( $zone_id, array( 'legal_query_rate_limit' => ! empty( $options['legal_query_rate_limit'] ) ) );
     }
 
     public static function is_rate_limit_query_field_entitlement_error( array $result ) {
@@ -1145,33 +1061,17 @@ final class Acquire_Cloudflare_Cache_Manager {
     }
 
     public static function merge_hardening_rules( array $existing_rules, array $recommended_rules ) {
-        $managed_names = array();
-        foreach ( $recommended_rules as $rule ) {
-            if ( is_array( $rule ) && ! empty( $rule['description'] ) ) {
-                $managed_names[] = (string) $rule['description'];
+        foreach ( $recommended_rules as $wanted ) {
+            $matches = 0;
+            foreach ( $existing_rules as $live ) {
+                unset( $live['id'], $live['ref'], $live['last_updated'], $live['version'] );
+                $comparison = $wanted;
+                unset( $comparison['id'], $comparison['ref'], $comparison['last_updated'], $comparison['version'] );
+                if ( ACFCM_Defense::fingerprint( array( $live ) ) === ACFCM_Defense::fingerprint( array( $comparison ) ) ) { $matches++; }
             }
+            if ( 1 !== $matches ) { throw new RuntimeException( 'Legacy rule is missing, modified or duplicated. Description matching does not establish ownership. Review the zone; no rules were replaced.' ); }
         }
-
-        $merged = array();
-
-        foreach ( $existing_rules as $rule ) {
-            if ( ! is_array( $rule ) ) {
-                continue;
-            }
-
-            $description = isset( $rule['description'] ) ? (string) $rule['description'] : '';
-            if ( in_array( $description, $managed_names, true ) ) {
-                continue;
-            }
-
-            $merged[] = self::prepare_ruleset_rule_for_update( $rule );
-        }
-
-        foreach ( $recommended_rules as $rule ) {
-            $merged[] = $rule;
-        }
-
-        return $merged;
+        return $existing_rules;
     }
 
     public static function combine_hardening_results( array $results ) {
@@ -2295,8 +2195,8 @@ final class Acquire_Cloudflare_Cache_Manager {
 
             <hr>
             <h2>Cloudflare Hardening Rules</h2>
-            <p>Creates or updates selected Cloudflare WAF and rate limiting rules for the current site’s Zone ID. Existing Cloudflare rules are preserved.</p>
-            <p class="description">The Cloudflare API token needs WAF edit permission. The high-rate query-string option also needs rate limiting rules support for the zone.</p>
+            <p>Verifies recognized deployed defenses without changing them. Explicit onboarding adds sensitive-file protection and the public-page rate policy only when ownership and rule capacity are clear.</p>
+            <p class="description">Requires Rulesets read and WAF edit permissions. Free-plan baseline: five custom-rule slots and one rate-rule slot; public pages are blocked for 10 seconds after 30 matching requests per 10 seconds per IP and data center. Submissions and WP sessions skip only rate limiting. Existing policies are never replaced or consolidated; drift and quota conflicts require review. No firewall changes run on upgrade, edits or purges.</p>
             <p class="description">Query-string protections target only <code>/privacy-policy/</code> and <code>/terms-and-conditions/</code>.</p>
             <?php if ( ! $can_manage_site_cloudflare ) : ?>
                 <p>Network Admin permission is required to install Cloudflare hardening rules while a shared Cloudflare API token is active.</p>
@@ -2305,12 +2205,9 @@ final class Acquire_Cloudflare_Cache_Manager {
                     <input type="hidden" name="action" value="acfcm_install_hardening_rules">
                     <?php wp_nonce_field( 'acfcm_install_hardening_rules' ); ?>
                     <fieldset>
-                        <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_wordpress_probes" value="1"> Block WordPress exploit probes</label>
-                        <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_xmlrpc" value="1"> Block XML-RPC</label>
-                        <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_legal_query_challenge" value="1"> Protect static/legal pages from query-string cache busting</label>
-                        <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_legal_query_rate_limit" value="1"> Challenge high-rate query-string traffic</label>
+                        <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_defense_baseline" value="1"> Verify deployed defenses / explicitly onboard the defense baseline</label>
                     </fieldset>
-                    <p><?php submit_button( 'Install/Update Hardening Rules', 'secondary', 'acfcm_install_hardening_rules_submit', false, array( 'onclick' => "return confirm('Install or update the selected Cloudflare hardening rules for this zone?');" ) ); ?></p>
+                    <p><?php submit_button( 'Verify / Onboard Defense Baseline', 'secondary', 'acfcm_install_hardening_rules_submit', false, array( 'onclick' => "return confirm('Explicitly verify or onboard the defense baseline for this zone?');" ) ); ?></p>
                 </form>
             <?php else : ?>
                 <p>Save a Cloudflare Zone ID before installing hardening rules.</p>
@@ -2495,20 +2392,17 @@ final class Acquire_Cloudflare_Cache_Manager {
 
             <hr>
             <h2>Network-Wide Cloudflare Hardening Rules</h2>
-            <p>Install or update selected WAF and rate limiting rules for every enabled Cloudflare zone on this network. Existing Cloudflare rules are preserved.</p>
-            <p class="description">The Cloudflare API token needs WAF edit permission. The high-rate query-string option also needs rate limiting rules support for the zone.</p>
+            <p>Explicitly verify or onboard the defense baseline for every enabled Cloudflare zone on this network. Recognized deployed policies and exceptions are retained. Each zone is handled separately; failures do not roll back completed zones.</p>
+            <p class="description">Requires Rulesets read and WAF edit permissions. Free-plan baseline: five custom-rule slots and one rate-rule slot; public pages are blocked for 10 seconds after 30 matching requests per 10 seconds per IP and data center. Submissions and WP sessions skip only rate limiting. Existing policies are never replaced or consolidated; drift and quota conflicts require review. No firewall changes run on upgrade, edits or purges.</p>
             <p class="description">For one subsite at a time, use the per-site actions in the Subsites table below.</p>
             <p class="description">Query-string protections target only <code>/privacy-policy/</code> and <code>/terms-and-conditions/</code>.</p>
             <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
                 <input type="hidden" name="action" value="acfcm_install_network_hardening_rules">
                 <?php wp_nonce_field( 'acfcm_install_network_hardening_rules' ); ?>
                 <fieldset>
-                    <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_wordpress_probes" value="1"> Block WordPress exploit probes</label>
-                    <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_xmlrpc" value="1"> Block XML-RPC</label>
-                    <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_legal_query_challenge" value="1"> Protect static/legal pages from query-string cache busting</label>
-                    <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_legal_query_rate_limit" value="1"> Challenge high-rate query-string traffic</label>
+                    <label style="display:block;margin-bottom:6px;"><input type="checkbox" name="acfcm_hardening_defense_baseline" value="1"> Verify deployed defenses / explicitly onboard the defense baseline</label>
                 </fieldset>
-                <p><?php submit_button( 'Install/Update Hardening Rules', 'secondary', 'acfcm_install_network_hardening_rules_submit', false, array( 'onclick' => "return confirm('Install or update the selected Cloudflare hardening rules for every enabled zone?');" ) ); ?></p>
+                <p><?php submit_button( 'Verify / Onboard Defense Baseline', 'secondary', 'acfcm_install_network_hardening_rules_submit', false, array( 'onclick' => "return confirm('Explicitly verify or onboard the defense baseline for every enabled zone?');" ) ); ?></p>
             </form>
 
             <hr>
@@ -2547,7 +2441,7 @@ final class Acquire_Cloudflare_Cache_Manager {
                                     <?php if ( ! empty( $site['zone_id'] ) ) : ?>
                                         <a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_purge_network_site&blog_id=' . (int) $site['blog_id'] ), 'acfcm_purge_network_site_' . (int) $site['blog_id'] ) ); ?>" onclick="return confirm('Purge EVERYTHING for this site’s Cloudflare zone?');">Purge Zone</a>
                                         <a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_install_network_site_cache_rules&blog_id=' . (int) $site['blog_id'] ), 'acfcm_install_cache_rules_' . (int) $site['blog_id'] ) ); ?>" onclick="return confirm('Install or update the recommended Cloudflare cache rules for this site zone?');">Install Cache Rules</a>
-                                        <a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_install_network_site_cache_security_rules&blog_id=' . (int) $site['blog_id'] ), 'acfcm_install_cache_security_rules_' . (int) $site['blog_id'] ) ); ?>" onclick="return confirm('Install or update cache rules and basic WordPress exploit-probe security for this site zone?');">Install Cache + Basic Security</a>
+                                        <a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=acfcm_install_network_site_cache_security_rules&blog_id=' . (int) $site['blog_id'] ), 'acfcm_install_cache_security_rules_' . (int) $site['blog_id'] ) ); ?>" onclick="return confirm('Install cache rules and explicitly verify or onboard the defense baseline for this site zone?');">Install Cache + Defense Baseline</a>
                                     <?php else : ?>
                                         —
                                     <?php endif; ?>
@@ -2862,7 +2756,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             'cache_rules_warning' => 'Cloudflare recommended cache rules installed or updated, but one related setting needs attention.',
             'cache_security_rules'         => 'Cloudflare cache and basic security rules installed or updated.',
             'cache_security_rules_warning' => 'Cloudflare cache and basic security rules installed or updated, but one related setting needs attention.',
-            'hardening_rules' => 'Cloudflare hardening rules installed or updated.',
+            'hardening_rules' => 'Cloudflare defense verification or onboarding completed.',
             'log_cleared'    => 'Cloudflare purge log cleared.',
         );
         if ( isset( $messages[ $notice ] ) ) {

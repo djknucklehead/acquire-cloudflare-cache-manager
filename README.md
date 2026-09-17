@@ -14,7 +14,7 @@ Cloudflare cache purging plugin for standalone WordPress sites and WordPress mul
 - Reduces ad and analytics query-string cache fragmentation when Cloudflare entitles the zone to custom cache key settings.
 - Optionally makes selected standalone sites or multisite subsite hostnames eligible for Cloudflare Cache Reserve.
 - Optionally enables Cloudflare Tiered Cache with Smart topology for selected Cloudflare zones when installing recommended cache rules.
-- Creates or updates optional Cloudflare hardening rules for common WordPress exploit probes, XML-RPC, and query-string abuse on static/legal pages.
+- Verifies deployed Cloudflare defenses without rewriting them; explicitly onboards a Free-plan defense baseline on new zones when ownership and quota checks pass.
 - Purges all enabled Cloudflare zones after WordPress core/plugin/theme updates.
 - Includes manual purge controls in Network Admin on multisite and in Settings on standalone installs.
 - Includes GitHub release update checking.
@@ -37,7 +37,7 @@ define( 'ACFCM_GITHUB_TOKEN', 'YOUR_GITHUB_TOKEN' );
 
 The plugin is also backward-compatible with the older `CLOUDFLARE_API_TOKEN` constant.
 
-For purge-only use, the token can be limited to cache purge access. To use the recommended cache rule setup action, the token also needs Cloudflare's `Zone > Cache Rules > Edit`, `Account Rulesets > Edit`, and `Account Filter Lists > Edit` permissions for the relevant zone/account. Enabling Tiered Cache with Smart topology also needs permission to edit zone settings, shown in Cloudflare as `Zone > Zone Settings > Edit` or `Zone > Cache Settings > Edit` depending on the token UI. To use hardening rule setup, the token needs `Zone > WAF > Edit`; the high-rate query-string option may also require `Zone > Rate Limiting Rules > Edit` and plan support for rate limiting rules.
+For purge-only use, the token can be limited to cache purge access. To use the recommended cache rule setup action, the token also needs Cloudflare's `Zone > Cache Rules > Edit`, `Account Rulesets > Edit`, and `Account Filter Lists > Edit` permissions for the relevant zone/account. Enabling Tiered Cache with Smart topology also needs permission to edit zone settings, shown in Cloudflare as `Zone > Zone Settings > Edit` or `Zone > Cache Settings > Edit` depending on the token UI. Defense verification requires access to read the zone custom and rate rulesets; explicit onboarding also requires `Zone > WAF > Edit`. Purge-only tokens cannot onboard defenses.
 
 On multisite, when a shared network or `wp-config.php` Cloudflare API token is active, Network Admin owns subsite Cloudflare mode, Zone ID, plugin settings, and Cloudflare rule installation actions. Site admins can still run manual purge actions for their own subsite. If no shared token is configured, individual subsites can continue to use their own saved Zone ID and per-site token.
 
@@ -74,7 +74,7 @@ On multisite, those global/update settings remain under **Network Admin → Sett
 
 After saving a Zone ID for a standalone site or multisite subsite, use **Save & Install Recommended Cache Rules** on the site settings screen, or **Install Cache Rules** from the Network Admin subsite table.
 
-In Network Admin, each subsite row also includes **Install Cache + Basic Security**. That action installs the recommended cache rules and the basic WordPress exploit-probe Cloudflare WAF rule for that one subsite zone. XML-RPC blocking, legal-page query-string challenges, and legal-page rate limiting remain opt-in hardening choices because they are more likely to affect site integrations or plan-specific limits.
+In Network Admin, each subsite row also includes **Install Cache + Defense Baseline**. This explicit action verifies/onboards defenses first, then runs cache-rule installation. A defense conflict stops before cache installation; a subsequent cache failure may leave successfully added defenses in place. Use the defense-only control when you do not intend to change cache rules.
 
 The plugin creates or updates these cache rules in Cloudflare's cache settings phase:
 
@@ -93,19 +93,34 @@ Cache Reserve storage sync and a paid Cache Reserve plan must be enabled separat
 Other existing Cloudflare cache rules are preserved. If Cloudflare reports that a zone is not entitled to custom cache key overrides, the installer retries without the marketing query-string cache key setting. If Cloudflare reports that Cache Reserve is not enabled or not entitled for the zone, the installer retries without plugin-managed Cache Reserve eligibility rules so the ordinary cache rules can still install.
 
 
-## Optional Cloudflare hardening rules
+## Cloudflare defense ownership and explicit onboarding (3.6.0)
 
-Use **Cloudflare Hardening Rules** on the site settings screen, or the Network-Wide Cloudflare Hardening Rules section in Network Admin, to install selected Cloudflare-level protections. In Network Admin, the hardening form applies to every enabled zone; use the subsite table actions for one-zone installs.
+**Verify / Onboard Defense Baseline** replaces the legacy hardening checkboxes. The network control handles enabled zones individually; one-zone controls affect only the selected zone. No defense installation runs automatically on plugin activation/upgrade, content editing, cache purging, or creation of a future zone.
 
-The plugin can create or update these deterministic Cloudflare rules:
+The September 17, 2026 rollout is adopted using zone-specific fingerprints of the complete ordered custom and rate rule definitions, including IDs/refs and all extra conditions. Version/timestamp metadata is excluded. This verifies all 153 deployed zones without writing them. It preserves the eleven augmented/consolidated layouts, blackbearpac.com's legacy rate ID/ref, and bettertomorrowinamerica.com's existing all-path limiter and challenge. The three pending/moved zones excluded from that rollout require a separate status/adoption review before onboarding. These are externally managed policies: a changed definition requires review and a deliberately updated adoption mapping, even if the change appears harmless. A description alone never grants ownership. Old programmatic legacy-rule calls are review-only; they cannot recreate split blocks or replace a policy.
 
-- `ACFCM - Block WordPress exploit probes`: blocks random root PHP probes, direct PHP execution probes under `/wp-content/` and `/wp-includes/`, fake `/wp-admin/` probe files, and old install-path probes.
-- `ACFCM - Block XML-RPC`: blocks direct requests to `/xmlrpc.php`.
-- `ACFCM - Challenge legal-page query strings`: uses a managed challenge for query-string requests to `/privacy-policy/` and `/terms-and-conditions/`.
-- `ACFCM - Rate limit legal-page query strings`: uses Cloudflare rate limiting to managed-challenge repeated query-string traffic to those same legal pages after 10 requests in 10 seconds. If Cloudflare does not entitle the zone to inspect query strings in rate limiting rules, the installer retries with a path-only legal-page rate limit.
+For a new, explicitly selected zone, the installer adds the exact rollout baseline:
 
-The hardening installer preserves existing Cloudflare WAF and rate limiting rules. It replaces matching selected ACFCM-managed rules by description so the installer can be re-run safely. Verified bots are excluded with Cloudflare's `cf.client.bot` field.
+- Sensitive-file probe blocking.
+- A custom exception that skips **only `http_ratelimit`** for non-GET/HEAD submissions, authorization headers, WordPress/password/Regnum/Woo session signals and selected dynamic queries.
+- Public-page rate blocking: 30 matching requests per 10 seconds per IP and Cloudflare data center in that zone, with a 10-second block. Verified bots, admin/login/cron/REST/API paths and common static/media assets are excluded. Ordinary public pages containing Gravity Forms remain subject to the browsing limit; normal form submissions are exempt. Tracking parameters are neither rewritten nor removed.
 
+The installer conservatively budgets five custom rules and one rate rule, even on paid plans. With no existing baseline, it needs two free custom slots and an empty rate phase. Three unrelated custom rules can coexist; four or five require manual review. Existing active or disabled rate policies and unknown skip/execute rules are not replaced. The installer never automatically consolidates external rules or broadens a WAF skip. Existing unrelated blocks/challenges retain their IDs, expressions and order and can still affect request behavior.
+
+Both phases are preflighted before writing. A per-zone WordPress lock prevents overlapping installers in the same installation, across its networks. Each addition uses a create-only API request with stable references, fresh phase reads and verified readback. There is no whole-ruleset PUT, rule PATCH, DELETE, automatic retry or rollback. Concurrent external changes and partial/uncertain API failures stop further writes with an actionable notice. Cloudflare does not provide a transaction spanning these calls: a concurrent external edit in the read/write window or a partial request can leave an addition applied. Inspect both phases before retrying; never blindly restore an old snapshot. Separate WordPress installations do not share the local lock.
+
+A crashed installer deliberately leaves `acfcm_defense_lock_<zone-id>` on the main site of the main network (current site on standalone). Only after confirming that no installer is active, an administrator can remove that option with WP-CLI on that site and retry. No new disk logs or growing policy history are created.
+
+API references: [add a rule without replacing existing rules](https://developers.cloudflare.com/ruleset-engine/rulesets-api/add-rule/), [rate limiting capabilities](https://developers.cloudflare.com/waf/rate-limiting-rules/), [custom rules](https://developers.cloudflare.com/waf/custom-rules/).
+
+### Safe upgrade and canary
+
+1. Back up the installed plugin and read current queue/settings and Cloudflare rules without changing them. Publishing the release does not install it on WordPress or change Cloudflare policies.
+2. For a controlled canary from v3.5.0, use **Hold for updates** before replacing the plugin if this update should not start a maintenance batch. Review pending work before resuming. Ordinary future updates do not require Hold; it is an optional operational pause. From v3.4.4, temporarily disable its automatic update/external-clear purge triggers and review pending broad jobs before upgrading.
+3. Update one installation first. Verify the version, settings, queue and editor; do not click combined cache installation merely to test compatibility. Upgrade itself adds no firewall writes or immediate broad purge; existing enabled update hooks can still enqueue the existing paced maintenance batch.
+4. A separately approved defense-only canary on one already-deployed zone should perform GET verification only and leave both rulesets identical. Choose an augmented zone and then the two retained-policy exceptions before considering a network-wide verification. No cache purge is needed.
+5. New-zone onboarding is a separate explicit choice. Review its existing rules and quota first. Test public/tracking pages, form submission, authenticated editing, previews and media after an approved onboarding. Local mocks and saved traces are not end-to-end production form tests.
+6. Resume only the maintenance work intended to run. Do not revert to an older plugin and rerun its legacy hardening installer: that reintroduces destructive description matching. Rolling back this plugin code does not roll back Cloudflare rules.
 
 ## Automatic GitHub release packaging
 
@@ -183,4 +198,4 @@ php tests/wpengine-purge-regression.php
 
 The [integration harness](tests/integration/README.md) provisions disposable real WordPress/MariaDB standalone and multisite sites with blocked outbound requests and fake Cloudflare responses. It exercises HTTP/REST saves, request shutdown, persisted cron, concurrency and optional real Redis Object Cache. It does not certify the production theme, host cache, PHP/database versions, browser login flow or live Cloudflare behavior.
 
-The plugin header/class version is `3.5.0`; the matching release tag is `v3.5.0`. Release packages include only the plugin source, README, changelog and assets. Back up the installed plugin before updating; on multisite, replacement affects every site using that installation.
+The plugin header/class version is `3.6.0`; the matching release tag is `v3.6.0`. Release packages include only the plugin source, README, changelog and assets. Back up the installed plugin before updating; on multisite, replacement affects every site using that installation.
