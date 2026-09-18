@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.7.3 — 2026-09-18
+
+- Clear known current-site WordPress object-cache entries before the explicit site-level WP Engine + Cloudflare purge, including autoloaded/individual options, posts and metadata, terms, comments, taxonomy relationships and core query versions. Read existing record IDs in batches after direct database search-replace.
+- Never flush the backend, customer-wide generation, network/global groups or other subsites. Arbitrary third-party opaque keys and individually cached deleted records cannot be safely enumerated and are not included. Keep network/maintenance purges unchanged; stop before page/CDN dispatch if object-cache invalidation cannot be verified.
+
 ## 3.7.2 — 2026-09-18
 
 - Allow fresh security-only review and explicit approval for historically excluded zones after verifying their current active/unpaused status, expected account, zone ID, domain and WordPress scope. Pending, paused, moved and mismatched zones remain blocked.

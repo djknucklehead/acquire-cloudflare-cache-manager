@@ -12,7 +12,7 @@ function update_option($k,$v,...$a){$GLOBALS['opts'][$GLOBALS['blog']][$k]=$v;re
 function add_option($k,$v,...$a){if(get_option($k)!==false)return false;return update_option($k,$v);}
 function get_site_option($k,$d=false){return $GLOBALS['net'][$k]??$d;} function update_site_option($k,$v){$GLOBALS['net'][$k]=$v;}
 function get_site_transient($k){return get_site_option($k);} function set_site_transient($k,$v,$t){update_site_option($k,$v);} function delete_site_transient($k){unset($GLOBALS['net'][$k]);}
-function maybe_unserialize($v){return unserialize($v);} function maybe_serialize($v){return serialize($v);} function wp_cache_delete(...$a){}
+function maybe_unserialize($v){return unserialize($v);} function maybe_serialize($v){return serialize($v);} function wp_cache_delete(...$a){if(isset($GLOBALS['object_delete']))return ($GLOBALS['object_delete'])(...$a);}
 class DB {public $options='options'; function get_results($sql){$rows=[];foreach($GLOBALS['opts'][$GLOBALS['blog']]??[] as $k=>$v){if(strpos($k,'acfcm_purge_job_')===0)$rows[]=(object)['option_name'=>$k,'option_value'=>serialize($v)];}return $rows;} function prepare($q,...$a){return [$q,$a];} function query($q){[$sql,$a]=$q;if(strpos($sql,'INSERT IGNORE')===0){[$key,$new]=$a;if(get_option($key)!==false)return 0;update_option($key,unserialize($new));return 1;}$delete=strpos($sql,'DELETE')===0;if($delete){[$key,$old]=$a;}else{[$new,$key,$old]=$a;}if(serialize(get_option($key))!==$old)return 0;if($delete)unset($GLOBALS['opts'][$GLOBALS['blog']][$key]);else update_option($key,unserialize($new));return 1;}}
 $GLOBALS['wpdb']=new DB;
 function wp_generate_uuid4(){static $i=0;return 'uuid-'.++$i;} function wp_rand($a,$b){return $a;}
@@ -63,5 +63,5 @@ reset_state();$GLOBALS['responses']=array_fill(0,2,['code'=>503,'body'=>'{}']);P
 function wp_list_pluck($items,$field){return array_column($items,$field);}
 function get_sites($args){return [1,2];} function get_bloginfo($v){return 'Test site';} function get_home_url($id,$p){return 'https://site'.$id.'.test'.$p;}
 check(P::retry_after_seconds(gmdate('D, d M Y H:i:s',time()+600).' GMT')>=599,'HTTP-date Retry-After parsed');
-$source=file_get_contents(dirname(__DIR__).'/acquire-cloudflare-cache-manager.php');preg_match('/Version:\s+(\S+)/',$source,$m);check($m[1]===P::VERSION&&'v'.P::VERSION==='v3.7.2','header constant and future release tag aligned');
+$source=file_get_contents(dirname(__DIR__).'/acquire-cloudflare-cache-manager.php');preg_match('/Version:\s+(\S+)/',$source,$m);check($m[1]===P::VERSION&&'v'.P::VERSION==='v3.7.3','header constant and future release tag aligned');
 echo "All purge regression tests passed.\n";

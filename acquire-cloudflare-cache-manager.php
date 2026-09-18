@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with per-site purging, optional Cache Reserve and Smart Tiered Cache support, cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.7.2
+ * Version:     3.7.3
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -17,6 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 require_once __DIR__ . '/includes/class-acfcm-network-queue.php';
+require_once __DIR__ . '/includes/class-acfcm-site-object-cache.php';
 require_once __DIR__ . '/includes/class-acfcm-defense.php';
 require_once __DIR__ . '/includes/class-acfcm-runtime-guard.php';
 require_once __DIR__ . '/includes/class-acfcm-cache-policy.php';
@@ -25,7 +26,7 @@ require_once __DIR__ . '/includes/class-acfcm-cache-admin.php';
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.7.2';
+    const VERSION       = '3.7.3';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -427,6 +428,15 @@ final class Acquire_Cloudflare_Cache_Manager {
 
     public static function purge_zone_everything( $zone_id, $immediate_edge = false ) {
         return self::reliable_purge( $zone_id, array( 'purge_everything' => true ), false, $immediate_edge );
+    }
+
+    /** Explicit site button only; maintenance/network purges retain their own semantics. */
+    public static function purge_current_site_everything() {
+        if ( ! ACFCM_Site_Object_Cache::clear() ) {
+            return array( 'success' => false, 'code' => 0, 'message' => 'Site WordPress object-cache invalidation could not be verified; page/CDN purge was not sent.' );
+        }
+        // Read configuration again after invalidating potentially stale options.
+        return self::purge_zone_everything( self::get_zone_id(), true );
     }
 
     public static function enable_smart_tiered_cache( $zone_id ) {
@@ -2400,7 +2410,7 @@ final class Acquire_Cloudflare_Cache_Manager {
         check_admin_referer( 'acfcm_purge_site_everything' );
 
         $zone_id = self::get_zone_id();
-        $result  = self::purge_zone_everything( $zone_id, true );
+        $result  = self::purge_current_site_everything();
         self::log_site_purge( 'manual_site_everything', $zone_id, array(), array( $result ) );
 
         wp_safe_redirect( add_query_arg( 'acfcm_notice', self::manual_purge_notice( $result ), wp_get_referer() ?: admin_url() ) );
@@ -2437,7 +2447,7 @@ final class Acquire_Cloudflare_Cache_Manager {
             switch_to_blog( $blog_id );
         }
         try {
-            $result = self::purge_zone_everything( $zone_id, true );
+            $result = self::purge_current_site_everything();
         } finally {
             if ( $switched ) {
                 restore_current_blog();
@@ -2655,7 +2665,7 @@ final class Acquire_Cloudflare_Cache_Manager {
         }
         $notice = sanitize_key( wp_unslash( $_GET['acfcm_notice'] ) );
         $messages = array(
-            'combined_sent'   => 'Cache purge dispatched for this domain and its Cloudflare zone. See Recent activity for details.',
+            'combined_sent'   => 'Known WordPress object-cache entries cleared for this site; WP Engine and Cloudflare purges dispatched. Opaque third-party object-cache keys are not included. See Recent activity for details.',
             'combined_queued' => 'Cache purge is pending retry or an existing request. See Recent activity for details.',
             'combined_failed' => 'Cache purge could not complete. See Recent activity for details.',
             'home'           => 'Cloudflare homepage purge requested.',

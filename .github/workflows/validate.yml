@@ -25,6 +25,7 @@ jobs:
       - name: Purge regression tests
         run: |
           php tests/wpengine-purge-regression.php
+          php tests/site-object-cache-regression.php
           php tests/network-queue-regression.php
           php tests/defense-regression.php
           php tests/defense-excluded-regression.php
