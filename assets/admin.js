@@ -39,7 +39,7 @@
         const state = result.data;
         status.textContent = `${state.status}: ${state.cursor || 0} of ${state.total || 0} steps. ${state.error || ''}`;
         if (state.status !== 'running') {
-          if (['complete', 'rolled_back'].includes(state.status)) location.reload();
+          if (['complete', 'rolled_back', 'review'].includes(state.status)) location.reload();
           return;
         }
         data.set('policy_action', 'step');

@@ -3,7 +3,7 @@
  * Plugin Name: Acquire Cloudflare Cache Manager
  * Plugin URI:  https://acquiredigital.co
  * Description: Cloudflare cache manager for standalone WordPress and multisite networks, with per-site purging, optional Cache Reserve and Smart Tiered Cache support, cache and hardening rule setup, and GitHub release update checks.
- * Version:     3.7.1
+ * Version:     3.7.2
  * Author:      Kyle Burns
  * Author URI:  https://acquiredigital.co
  * Network:     true
@@ -25,7 +25,7 @@ require_once __DIR__ . '/includes/class-acfcm-cache-admin.php';
 if ( ! class_exists( 'Acquire_Cloudflare_Cache_Manager' ) ) :
 
 final class Acquire_Cloudflare_Cache_Manager {
-    const VERSION       = '3.7.1';
+    const VERSION       = '3.7.2';
     const DEFAULT_GITHUB_REPO = 'djknucklehead/acquire-cloudflare-cache-manager';
     const SLUG          = 'acquire-cloudflare-cache-manager';
     const BASENAME      = 'acquire-cloudflare-cache-manager/acquire-cloudflare-cache-manager.php';
@@ -381,7 +381,7 @@ final class Acquire_Cloudflare_Cache_Manager {
         $zone_id_path = rawurlencode( $zone_id );
 
         $response = wp_remote_request(
-            "https://api.cloudflare.com/client/v4/zones/{$zone_id_path}/{$path}",
+            "https://api.cloudflare.com/client/v4/zones/{$zone_id_path}" . ( '' !== $path ? '/' . $path : '' ),
             $args
         );
 

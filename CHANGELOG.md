@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.7.2 — 2026-09-18
+
+- Allow fresh security-only review and explicit approval for historically excluded zones after verifying their current active/unpaused status, expected account, zone ID, domain and WordPress scope. Pending, paused, moved and mismatched zones remain blocked.
+- Add per-site/network-row security review and approval controls, with user-bound, expiring approvals and status/ruleset rechecks before writes. Preserve security ownership, quota, drift and idempotence protections; leave cache migrations and purges untouched.
+
 ## 3.7.1 — 2026-09-18
 
 - Add one-click Install cache rules and Install security rules to each network site's Actions column and to subsite settings. No preview or agreement checkbox is required for installation.

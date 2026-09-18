@@ -197,4 +197,8 @@ php tests/wpengine-purge-regression.php
 
 The [integration harness](tests/integration/README.md) provisions disposable real WordPress/MariaDB standalone and multisite sites with blocked outbound requests and fake Cloudflare responses. It exercises HTTP/REST saves, request shutdown, persisted cron, concurrency and optional real Redis Object Cache. It does not certify the production theme, host cache, PHP/database versions, browser login flow or live Cloudflare behavior.
 
-The plugin version is `3.7.1` and its release tag is `v3.7.1`. Release packages include only the plugin source, README, changelog and assets. Back up the installed plugin before updating; on multisite, replacement affects every site using that installation.
+The plugin version is `3.7.2` and its release tag is `v3.7.2`. Release packages include only the plugin source, README, changelog and assets. Back up the installed plugin before updating; on multisite, replacement affects every site using that installation.
+
+### Formerly excluded security zones (3.7.2)
+
+For 59pac.com, 75pac.com and morriseyemail.com, **Install security rules** now reads current Cloudflare zone identity/status and prepares a security-only review if active and unpaused. **Approve security onboarding** appears in the same network Actions cell or subsite policy section. Review lists proposed additions and account/domain scope. Approval expires after 15 minutes, belongs to the reviewing administrator/site/zone, and rechecks identity/status and rules before changes. Existing policies, capacity and drift checks still apply. A partial failure can retry already verified progress without duplicating rules; concurrent or uncertain changes require a fresh review. A token needs Zone Read permission for this check. Cache installation status and backups are unaffected.

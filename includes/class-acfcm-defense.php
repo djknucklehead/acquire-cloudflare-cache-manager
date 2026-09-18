@@ -45,10 +45,44 @@ final class ACFCM_Defense {
         }
         return $states;
     }
+    public static function excluded_identity( $zone ) {
+        $names = array( '6b1cb01e4d40da8b389fbff05002b822' => '59pac.com', '899904e844a1246a10e039c97925c370' => '75pac.com', '4207d744a1ac97c6166ba56532681b90' => 'morriseyemail.com' );
+        return isset( $names[$zone] ) ? array( 'id' => $zone, 'name' => $names[$zone], 'account' => '63ef3a537b1cffce309b6a7645491560' ) : null;
+    }
+    private static function verify_excluded_zone( $zone ) {
+        $expected = self::excluded_identity( $zone );
+        if ( ! $expected ) { throw new RuntimeException( 'No reviewed zone identity is available.' ); }
+        $r = self::request( 'GET', $zone, '' );
+        $z = $r['result'] ?? null;
+        if ( empty( $r['success'] ) || ! is_array( $z ) ) { throw new RuntimeException( 'Could not verify current zone status. Check Zone Read permission and retry security review. Cache rules are unchanged.' ); }
+        $host = strtolower( (string) wp_parse_url( home_url( '/' ), PHP_URL_HOST ) );
+        if ( ( $z['id'] ?? '' ) !== $expected['id'] || ( $z['name'] ?? '' ) !== $expected['name'] || ( $z['account']['id'] ?? '' ) !== $expected['account'] || ! in_array( $host, array( $expected['name'], 'www.' . $expected['name'] ), true ) || Acquire_Cloudflare_Cache_Manager::get_zone_id() !== $zone ) {
+            throw new RuntimeException( 'Zone, account or site hostname does not match the reviewed security scope. Cache rules are unchanged.' );
+        }
+        if ( ( $z['status'] ?? '' ) !== 'active' || ! array_key_exists( 'paused', $z ) || false !== $z['paused'] ) { throw new RuntimeException( 'Security onboarding requires a currently active, unpaused zone. Cache rules are unchanged.' ); }
+        return $expected;
+    }
+    public static function review_excluded( $zone ) {
+        delete_option( 'acfcm_security_review' );
+        $identity = self::verify_excluded_zone( $zone );
+        $state = self::read( $zone );
+        $plan = self::plan( $zone, $state, array( 'defense_baseline' => true ), true );
+        $review = array( 'id' => wp_generate_uuid4(), 'zone' => $zone, 'site' => get_current_blog_id(), 'user' => get_current_user_id(), 'created' => time(), 'identity' => $identity, 'before' => $state, 'state' => $state, 'plan' => $plan );
+        if ( strlen( wp_json_encode( $review ) ) > 1048576 ) { throw new RuntimeException( 'Security review exceeds the backup limit.' ); }
+        update_option( 'acfcm_security_review', $review, false );
+        if ( get_option( 'acfcm_security_review' ) !== $review ) { throw new RuntimeException( 'Could not save security review.' ); }
+        return $review;
+    }
+    private static function approved_review( $zone, $id ) {
+        $r = get_option( 'acfcm_security_review', array() );
+        if ( ! $id || empty( $r['id'] ) || ! hash_equals( $r['id'], (string) $id ) || $r['zone'] !== $zone || $r['site'] !== get_current_blog_id() || $r['user'] !== get_current_user_id() || $r['created'] < time() - 900 ) { throw new RuntimeException( 'Security approval expired or scope changed. Click Install security rules to review again.' ); }
+        self::verify_excluded_zone( $zone );
+        return $r;
+    }
     /** Pure preflight: recognized rollout states are immutable, including legacy exceptions. */
-    public static function plan( $zone, array $states, array $options ) {
+    public static function plan( $zone, array $states, array $options, $reviewed_exclusion = false ) {
         $adoptions = require __DIR__ . '/defense-adoptions.php';
-        if ( isset( $adoptions['_excluded'][$zone] ) ) { throw new RuntimeException( 'This zone was excluded from the verified rollout because it was pending, paused or moved. Review its current status and explicitly approve a new adoption mapping before onboarding.' ); }
+        if ( isset( $adoptions['_excluded'][$zone] ) && ! $reviewed_exclusion ) { throw new RuntimeException( 'This zone was excluded from the verified rollout because it was pending, paused or moved. Review its current status and explicitly approve a new adoption mapping before onboarding.' ); }
         if ( isset( $adoptions[$zone] ) ) {
             foreach ( $adoptions[$zone] as $phase => $hash ) {
                 if ( ! isset( $states[$phase]['rules'] ) || self::fingerprint( $states[$phase]['rules'] ) !== $hash ) {
@@ -95,7 +129,7 @@ final class ACFCM_Defense {
         }
         return true;
     }
-    public static function install( $zone, array $options, $reviewed_state = null ) {
+    public static function install( $zone, array $options, $reviewed_state = null, $approval_id = null ) {
         if ( ! preg_match( '/^[a-f0-9]{32}$/', $zone ) ) { return self::result( false, 'A valid Cloudflare Zone ID is required.' ); }
         // One lock per zone across this WordPress installation, including multiple networks.
         $switched = false;
@@ -109,13 +143,16 @@ final class ACFCM_Defense {
         if ( ! $locked ) { return self::result( false, 'Another defense installation is running or was interrupted. After confirming no installer is active, an administrator can remove option ' . $lock . ' on the main site of the main network and retry.' ); }
         $writes = 0;
         try {
+            $review = self::excluded_identity( $zone ) ? self::approved_review( $zone, $approval_id ) : null;
             $state = self::read( $zone );
+            if ( $review && ! self::same_state( $review['state'], $state ) ) { throw new RuntimeException( 'Security rules changed after review. Click Install security rules to review again; no changes were sent.' ); }
             if ( null !== $reviewed_state && ! self::same_state( $reviewed_state, $state ) ) { throw new RuntimeException( 'Security rules changed since the combined preview. Review a fresh security setup; no firewall changes were sent.' ); }
-            $plan = self::plan( $zone, $state, $options );
+            $plan = self::plan( $zone, $state, $options, null !== $review );
             if ( ! $plan ) { return self::result( true, 'Verified existing policies; no firewall writes. Deployed exceptions and legacy policies are retained, not replaced with new recommendations.' ); }
             // Both phases are preflighted before the first write. Guard precedes new rate rule.
             foreach ( $plan as $phase => $rules ) {
                 foreach ( $rules as $rule ) {
+                    if ( $review ) { self::approved_review( $zone, $approval_id ); }
                     $fresh = self::read( $zone );
                     if ( ! self::same_state( $state, $fresh ) ) { throw new RuntimeException( 'Concurrent ruleset change detected. Review current rules before retrying.' ); }
                     $path = empty( $state[$phase] ) ? 'rulesets' : 'rulesets/' . rawurlencode( $state[$phase]['id'] ) . '/rules';
@@ -133,6 +170,11 @@ final class ACFCM_Defense {
                         throw new RuntimeException( 'Readback differs from the expected additive change. Stop and review both phases; existing rules will not be restored over concurrent changes.' );
                     }
                     $state = $after;
+                    if ( $review ) {
+                        $review['state'] = $after;
+                        update_option( 'acfcm_security_review', $review, false );
+                        if ( get_option( 'acfcm_security_review' ) !== $review ) { throw new RuntimeException( 'Could not save security progress. Review again before retrying.' ); }
+                    }
                 }
             }
             return self::result( true, 'Defense baseline added and verified. Existing rules were preserved. No cache purge was requested.' );
