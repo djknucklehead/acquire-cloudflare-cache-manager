@@ -7,7 +7,7 @@ function sx($ok,$m){if(!$ok)throw new RuntimeException($m);echo "PASS $m\n";}
 $zone='899904e844a1246a10e039c97925c370';$site=is_multisite()?2:1;
 wp_set_current_user(1);
 if(is_multisite())switch_to_blog($site);
-$keys=['cloudflare_zone_id','cloudflare_api_token','acfcm_security_review','acfcm_security_result'];
+$keys=['cloudflare_zone_id','cloudflare_api_token','acfcm_security_review','acfcm_security_result','acfcm_security_backup'];
 $old=[];foreach($keys as $k)$old[$k]=get_option($k,null);
 update_option('cloudflare_zone_id',$zone);update_option('cloudflare_api_token','fake-test-token');
 delete_option('acfcm_security_review');
@@ -32,25 +32,20 @@ try{
  if(is_multisite())restore_current_blog();
  $call=function($action,$id='')use(&$request){$request['policy_action']=$action;$request['review_id']=$id;return is_multisite()?ACFCM_Cache_Admin::network_execute($request):ACFCM_Cache_Admin::execute($action,$id);};
  $start=get_current_blog_id();$r=$call('security');
- sx($r['status']==='review'&&!$writes,'first click creates review without writes');
- sx(get_current_blog_id()===$start,'review restores network context');
+ sx($r['status']==='complete'&&$writes===6,'one click installs all recommended security rules');
+ sx(get_current_blog_id()===$start,'installation restores network context');
  if(is_multisite()){
-  $review=get_blog_option($site,'acfcm_security_review');
   ob_start();ACFCM_Cache_Admin::network_site_buttons(['blog_id'=>$site,'zone_id'=>$zone]);$html=ob_get_clean();
-  sx(strpos($html,'Approve security onboarding')!==false&&strpos($html,'75pac.com')!==false,'network row shows scoped approval');
+  sx(strpos($html,'Approve security onboarding')===false&&strpos($html,'Install cache')!==false&&strpos($html,'Install security rules')!==false,'network row has direct install buttons');
   ob_start();ACFCM_Cache_Admin::network_zones([['blog_id'=>$site,'zone_id'=>$zone]]);$forms=ob_get_clean();
-  sx(strpos($forms,'name="review_id" value="'.$review['id'].'"')!==false,'network form sends saved review ID');
-  switch_to_blog($site);
- }else $review=get_option('acfcm_security_review');
- ob_start();ACFCM_Cache_Admin::policy();$html=ob_get_clean();
- sx(strpos($html,'Approve security onboarding')!==false&&strpos($html,'Security additions to approve')!==false,'subsite shows review and explicit approval');
- if(is_multisite())restore_current_blog();
- $r=$call('security_approve',$review['id']);sx($r['status']==='complete'&&$writes===3,'approval installs only three additive security rules');
- sx(get_current_blog_id()===$start,'approval restores network context');
+  sx(strpos($forms,'security_approve')===false,'network forms have no approval step');
+ }
+ $r=$call('security');sx($r['status']==='complete'&&$writes===6,'repeat one-click install does not duplicate rules');
  if(is_multisite())switch_to_blog($site);
+ sx(!empty(get_option('acfcm_security_backup')),'automatic security backup exists');
  sx(ACFCM_Cache_Policy::store($zone)===$cache_before&&get_option('acfcm_public_cache_scope',[])===$scope_before,'cache journal and runtime scope unchanged');
  ob_start();ACFCM_Cache_Admin::policy();$html=ob_get_clean();
- sx(strpos($html,'Approve security onboarding')===false&&strpos($html,'Security: Defense baseline added')!==false,'completion replaces approval with separate security outcome');
+ sx(strpos($html,'Approve security onboarding')===false&&strpos($html,'Security: All recommended security rules')!==false,'completion replaces approval with separate security outcome');
  sx(!array_filter($paths,fn($p)=>strpos($p,'purge')!==false||strpos($p,'cache_settings')!==false),'no cache API or purge requests');
 }finally{
  if(get_current_blog_id()!==$site&&is_multisite())switch_to_blog($site);

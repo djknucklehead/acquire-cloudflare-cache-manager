@@ -29,6 +29,7 @@ jobs:
           php tests/network-queue-regression.php
           php tests/defense-regression.php
           php tests/defense-excluded-regression.php
+          php tests/security-one-click-regression.php
           python3 tests/defense-expressions.py
           php tests/cache-policy-regression.php
           php -d disable_functions=link tests/runtime-guard-install.php

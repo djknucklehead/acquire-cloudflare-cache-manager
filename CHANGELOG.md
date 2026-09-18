@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.7.4 — 2026-09-18
+
+- Install the full recommended security set in one click from network site rows or subsite settings: all three legacy custom protections, sensitive-file blocking, submission/session rate exceptions and public-page rate limiting. Add missing protections without duplicating matching legacy rules.
+- Remove the separate security review/approval UI. Automatically verify current zone identity/status, save a bounded backup and recheck scope and rules before each addition. Preserve unrelated rules and report quota/customization conflicts without overwriting them. Rename the cache action to Install cache.
+
 ## 3.7.3 — 2026-09-18
 
 - Clear known current-site WordPress object-cache entries before the explicit site-level WP Engine + Cloudflare purge, including autoloaded/individual options, posts and metadata, terms, comments, taxonomy relationships and core query versions. Read existing record IDs in batches after direct database search-replace.

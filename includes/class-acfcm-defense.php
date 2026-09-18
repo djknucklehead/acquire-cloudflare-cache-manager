@@ -123,6 +123,53 @@ final class ACFCM_Defense {
         }
         return $add;
     }
+    /** One-click full baseline; exact existing rules are retained with their IDs. */
+    private static function complete_plan( array $states ) {
+        $b = require __DIR__ . '/defense-baseline.php';
+        $legacy = array(
+            'acfcm_wordpress_probes_v1' => Acquire_Cloudflare_Cache_Manager::recommended_wordpress_probe_rule(),
+            'acfcm_xmlrpc_v1' => Acquire_Cloudflare_Cache_Manager::recommended_xmlrpc_block_rule(),
+            'acfcm_legal_query_v1' => Acquire_Cloudflare_Cache_Manager::recommended_legal_query_challenge_rule(),
+        );
+        $custom = array();
+        foreach ( $legacy as $ref => $rule ) { $rule['ref'] = $ref; $custom[] = $rule; }
+        $custom[] = $b['probe']; $custom[] = $b['guard'];
+        $add = array();
+        foreach ( array( self::CUSTOM => $custom, self::RATE => array( $b['rate'] ) ) as $phase => $wanted ) {
+            $live = $states[$phase]['rules'] ?? array();
+            foreach ( $wanted as $rule ) {
+                $matches = array();
+                foreach ( $live as $existing ) {
+                    if ( self::equivalent( $existing, $rule ) ) { $matches[] = $existing; }
+                    elseif ( ( $existing['ref'] ?? '' ) === $rule['ref'] || ( $existing['description'] ?? '' ) === $rule['description'] ) {
+                        throw new RuntimeException( 'An existing recommended security rule has custom changes. It was preserved; resolve the conflict in Cloudflare before retrying.' );
+                    }
+                }
+                if ( count( $matches ) > 1 ) { throw new RuntimeException( 'Duplicate security rules found. Remove the duplicate in Cloudflare before retrying.' ); }
+                if ( ! $matches ) { $add[$phase][] = $rule; }
+            }
+            if ( count( $live ) + count( $add[$phase] ?? array() ) > ( self::CUSTOM === $phase ? 5 : 1 ) ) {
+                throw new RuntimeException( 'Not enough rule slots for the complete security set. Existing custom rules were preserved; free capacity or consolidate them in Cloudflare before retrying.' );
+            }
+            foreach ( $live as $existing ) {
+                if ( self::CUSTOM === $phase && in_array( $existing['action'], array( 'skip', 'execute' ), true ) && ! self::equivalent( $existing, $b['guard'] ) ) {
+                    throw new RuntimeException( 'An existing skip/execute rule could bypass the recommended protections. Resolve that conflict in Cloudflare before retrying.' );
+                }
+            }
+        }
+        return $add;
+    }
+    private static function verify_install_zone( $zone ) {
+        if ( self::excluded_identity( $zone ) ) { self::verify_excluded_zone( $zone ); return; }
+        $r = self::request( 'GET', $zone, '' ); $z = $r['result'] ?? array();
+        $name = strtolower( (string) ( $z['name'] ?? '' ) );
+        $host = strtolower( (string) wp_parse_url( home_url( '/' ), PHP_URL_HOST ) );
+        if ( empty( $r['success'] ) || ! $name || ( $z['id'] ?? '' ) !== $zone || Acquire_Cloudflare_Cache_Manager::get_zone_id() !== $zone
+            || ( $host !== $name && substr( $host, -strlen( '.' . $name ) ) !== '.' . $name )
+            || ( $z['status'] ?? '' ) !== 'active' || ! isset( $z['paused'] ) || false !== $z['paused'] ) {
+            throw new RuntimeException( 'Could not verify an active, unpaused Cloudflare zone for this site. Check the zone mapping and Zone Read permission.' );
+        }
+    }
     private static function same_state( array $a, array $b ) {
         foreach ( array( self::CUSTOM, self::RATE ) as $phase ) {
             if ( ( $a[$phase]['id'] ?? null ) !== ( $b[$phase]['id'] ?? null ) || ( $a[$phase]['version'] ?? null ) !== ( $b[$phase]['version'] ?? null ) || self::fingerprint( $a[$phase]['rules'] ?? array() ) !== self::fingerprint( $b[$phase]['rules'] ?? array() ) ) { return false; }
@@ -143,15 +190,24 @@ final class ACFCM_Defense {
         if ( ! $locked ) { return self::result( false, 'Another defense installation is running or was interrupted. After confirming no installer is active, an administrator can remove option ' . $lock . ' on the main site of the main network and retry.' ); }
         $writes = 0;
         try {
-            $review = self::excluded_identity( $zone ) ? self::approved_review( $zone, $approval_id ) : null;
+            $complete = ! empty( $options['complete_security'] );
+            if ( $complete ) { self::verify_install_zone( $zone ); }
+            $review = ! $complete && self::excluded_identity( $zone ) ? self::approved_review( $zone, $approval_id ) : null;
             $state = self::read( $zone );
             if ( $review && ! self::same_state( $review['state'], $state ) ) { throw new RuntimeException( 'Security rules changed after review. Click Install security rules to review again; no changes were sent.' ); }
             if ( null !== $reviewed_state && ! self::same_state( $reviewed_state, $state ) ) { throw new RuntimeException( 'Security rules changed since the combined preview. Review a fresh security setup; no firewall changes were sent.' ); }
-            $plan = self::plan( $zone, $state, $options, null !== $review );
-            if ( ! $plan ) { return self::result( true, 'Verified existing policies; no firewall writes. Deployed exceptions and legacy policies are retained, not replaced with new recommendations.' ); }
+            $plan = $complete ? self::complete_plan( $state ) : self::plan( $zone, $state, $options, null !== $review );
+            if ( $complete && $plan ) {
+                $backup = array( 'zone' => $zone, 'site' => get_current_blog_id(), 'created' => time(), 'state' => $state );
+                if ( strlen( wp_json_encode( $backup ) ) > 1048576 ) { throw new RuntimeException( 'Security backup exceeds the storage limit.' ); }
+                update_option( 'acfcm_security_backup', $backup, false );
+                if ( get_option( 'acfcm_security_backup' ) !== $backup ) { throw new RuntimeException( 'Could not save the security backup; no changes were sent.' ); }
+            }
+            if ( ! $plan ) { return self::result( true, $complete ? 'All recommended security rules are already installed and verified.' : 'Verified existing policies; no firewall writes. Deployed exceptions and legacy policies are retained, not replaced with new recommendations.' ); }
             // Both phases are preflighted before the first write. Guard precedes new rate rule.
             foreach ( $plan as $phase => $rules ) {
                 foreach ( $rules as $rule ) {
+                    if ( $complete ) { self::verify_install_zone( $zone ); }
                     if ( $review ) { self::approved_review( $zone, $approval_id ); }
                     $fresh = self::read( $zone );
                     if ( ! self::same_state( $state, $fresh ) ) { throw new RuntimeException( 'Concurrent ruleset change detected. Review current rules before retrying.' ); }
@@ -177,7 +233,7 @@ final class ACFCM_Defense {
                     }
                 }
             }
-            return self::result( true, 'Defense baseline added and verified. Existing rules were preserved. No cache purge was requested.' );
+            return self::result( true, $complete ? 'All recommended security rules installed and verified. Existing rules preserved; backup saved.' : 'Defense baseline added and verified. Existing rules were preserved. No cache purge was requested.' );
         } catch ( RuntimeException $e ) {
             return self::result( false, ( $writes ? 'Partial or uncertain installation: ' : '' ) . $e->getMessage() );
         } finally {

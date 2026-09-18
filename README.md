@@ -92,19 +92,20 @@ Installation saves a full backup before any provider write, installs/verifies th
 
 **Admin layout:** overview and routine page refresh appear first. Maintenance and migration failures remain visible. Connection settings, security actions and update checks use native disclosure sections. A visible **Clear WP Engine + Cloudflare cache** button clears this domain’s WP Engine page cache and the configured Cloudflare zone in one action. Network and site permissions, nonces, blank secret inputs, token inheritance, update selections, timing controls, Hold/Resume/Cancel/Retry, logs and toolbar actions are retained.
 
-## Cloudflare defense ownership and explicit onboarding (3.6.0)
+## One-click security installation (3.7.4)
 
-**Verify / Onboard Defense Baseline** replaces the legacy hardening checkboxes. The network control handles enabled zones individually; one-zone controls affect only the selected zone. No defense installation runs automatically on plugin activation/upgrade, content editing, cache purging, or creation of a future zone.
+**Install cache** and **Install security rules** appear in each network site's Actions cell and on subsite settings. The security button automatically validates the current zone, saves a bounded non-autoloaded backup, and installs all recommended protections in one action. There is no preview, acknowledgment or approval step. No security changes run on plugin upgrades, content edits or cache purges.
 
-The September 17, 2026 rollout is adopted using zone-specific fingerprints of the complete ordered custom and rate rule definitions, including IDs/refs and all extra conditions. Version/timestamp metadata is excluded. This verifies all 153 deployed zones without writing them. It preserves the eleven augmented/consolidated layouts, blackbearpac.com's legacy rate ID/ref, and bettertomorrowinamerica.com's existing all-path limiter and challenge. The three pending/moved zones excluded from that rollout require a separate status/adoption review before onboarding. These are externally managed policies: a changed definition requires review and a deliberately updated adoption mapping, even if the change appears harmless. A description alone never grants ownership. Old programmatic legacy-rule calls are review-only; they cannot recreate split blocks or replace a policy.
+The complete set contains five custom rules and one rate rule:
 
-For a new, explicitly selected zone, the installer adds the exact rollout baseline:
-
+- WordPress exploit-probe blocking.
+- XML-RPC blocking (except verified bots), matching the legacy recommendation. Sites that need XML-RPC integrations should account for this before using the complete installer.
+- Managed challenges for legal-page query strings.
 - Sensitive-file probe blocking.
-- A custom exception that skips **only `http_ratelimit`** for non-GET/HEAD submissions, authorization headers, WordPress/password/Regnum/Woo session signals and selected dynamic queries.
-- Public-page rate blocking: 30 matching requests per 10 seconds per IP and Cloudflare data center in that zone, with a 10-second block. Verified bots, admin/login/cron/REST/API paths and common static/media assets are excluded. Ordinary public pages containing Gravity Forms remain subject to the browsing limit; normal form submissions are exempt. Tracking parameters are neither rewritten nor removed.
+- Submission/session exceptions that skip only rate limiting.
+- Public-page rate blocking: 30 matching requests per 10 seconds per IP and Cloudflare data center, with a 10-second block.
 
-The installer conservatively budgets five custom rules and one rate rule, even on paid plans. With no existing baseline, it needs two free custom slots and an empty rate phase. Three unrelated custom rules can coexist; four or five require manual review. Existing active or disabled rate policies and unknown skip/execute rules are not replaced. The installer never automatically consolidates external rules or broadens a WAF skip. Existing unrelated blocks/challenges retain their IDs, expressions and order and can still affect request behavior.
+Matching existing rules keep their IDs and definitions. Sites with the previous three-rule baseline receive the three missing legacy protections. The public-page limiter covers legal pages as part of the broader policy; the older separate legal-page limiter is not added as a second rate rule. Custom conflicts or insufficient capacity produce a specific error without deleting existing protections. The installer conservatively budgets five custom rules and one rate rule. Historically excluded zones use current active/unpaused status checks automatically, with no separate approval screen.
 
 Both phases are preflighted before writing. A per-zone WordPress lock prevents overlapping installers in the same installation, across its networks. Each addition uses a create-only API request with stable references, fresh phase reads and verified readback. There is no whole-ruleset PUT, rule PATCH, DELETE, automatic retry or rollback. Concurrent external changes and partial/uncertain API failures stop further writes with an actionable notice. Cloudflare does not provide a transaction spanning these calls: a concurrent external edit in the read/write window or a partial request can leave an addition applied. Inspect both phases before retrying; never blindly restore an old snapshot. Separate WordPress installations do not share the local lock.
 
@@ -201,7 +202,7 @@ The plugin version is `3.7.2` and its release tag is `v3.7.2`. Release packages 
 
 ### Formerly excluded security zones (3.7.2)
 
-For 59pac.com, 75pac.com and morriseyemail.com, **Install security rules** now reads current Cloudflare zone identity/status and prepares a security-only review if active and unpaused. **Approve security onboarding** appears in the same network Actions cell or subsite policy section. Review lists proposed additions and account/domain scope. Approval expires after 15 minutes, belongs to the reviewing administrator/site/zone, and rechecks identity/status and rules before changes. Existing policies, capacity and drift checks still apply. A partial failure can retry already verified progress without duplicating rules; concurrent or uncertain changes require a fresh review. A token needs Zone Read permission for this check. Cache installation status and backups are unaffected.
+Current zone identity/status and scope are checked automatically by the single Install security rules action. Zone Read permission is required; cache journals remain unchanged.
 
 ### Site-only WordPress object-cache clearing
 
