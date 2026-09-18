@@ -28,6 +28,11 @@ jobs:
           php tests/network-queue-regression.php
           php tests/defense-regression.php
           python3 tests/defense-expressions.py
+          php tests/cache-policy-regression.php
+          php -d disable_functions=link tests/runtime-guard-install.php
+          python3 tests/cache-expressions.py
+          python3 tests/cache-guard-http.py
+          find includes -name "*.php" -exec php -l {} \;
           php -l includes/class-acfcm-defense.php
           php -l includes/defense-baseline.php
           php -l includes/defense-adoptions.php

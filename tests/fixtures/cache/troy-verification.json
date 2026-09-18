@@ -1,0 +1,22 @@
+{
+  "http_request_cache_settings": {
+    "id": "0e4e606609e14cc49b545b24891a3ce4",
+    "version": "5",
+    "matches": true
+  },
+  "http_response_cache_settings": {
+    "id": "b3c851aa4fac479cbf297f742c302b77",
+    "version": "1",
+    "matches": true
+  },
+  "http_request_firewall_custom": {
+    "id": "eb97e73351ae4812b4a6f37ba8263093",
+    "version": "1",
+    "matches": true
+  },
+  "http_ratelimit": {
+    "id": "3bb22843d38b4bca8c868f4747c409b6",
+    "version": "1",
+    "matches": true
+  }
+}

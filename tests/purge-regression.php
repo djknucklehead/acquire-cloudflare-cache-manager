@@ -63,5 +63,5 @@ reset_state();$GLOBALS['responses']=array_fill(0,2,['code'=>503,'body'=>'{}']);P
 function wp_list_pluck($items,$field){return array_column($items,$field);}
 function get_sites($args){return [1,2];} function get_bloginfo($v){return 'Test site';} function get_home_url($id,$p){return 'https://site'.$id.'.test'.$p;}
 check(P::retry_after_seconds(gmdate('D, d M Y H:i:s',time()+600).' GMT')>=599,'HTTP-date Retry-After parsed');
-$source=file_get_contents(dirname(__DIR__).'/acquire-cloudflare-cache-manager.php');preg_match('/Version:\s+(\S+)/',$source,$m);check($m[1]===P::VERSION&&'v'.P::VERSION==='v3.6.0','header constant and future release tag aligned');
+$source=file_get_contents(dirname(__DIR__).'/acquire-cloudflare-cache-manager.php');preg_match('/Version:\s+(\S+)/',$source,$m);check($m[1]===P::VERSION&&'v'.P::VERSION==='v3.7.1','header constant and future release tag aligned');
 echo "All purge regression tests passed.\n";

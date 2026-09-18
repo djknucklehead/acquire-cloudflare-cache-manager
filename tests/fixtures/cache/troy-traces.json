@@ -1,0 +1,110 @@
+[
+  {
+    "name": "public",
+    "rules": [
+      {
+        "description": "Public pages - domain-wide tracking cache and purge",
+        "cache": true
+      }
+    ]
+  },
+  {
+    "name": "tracking",
+    "rules": [
+      {
+        "description": "Public pages - domain-wide tracking cache and purge",
+        "cache": true
+      }
+    ]
+  },
+  {
+    "name": "post",
+    "rules": [
+      {
+        "description": "BYPASS - admin, sessions, forms POST, previews, functional queries",
+        "cache": false
+      }
+    ]
+  },
+  {
+    "name": "ajax",
+    "rules": [
+      {
+        "description": "BYPASS - admin, sessions, forms POST, previews, functional queries",
+        "cache": false
+      }
+    ]
+  },
+  {
+    "name": "preview",
+    "rules": [
+      {
+        "description": "BYPASS - admin, sessions, forms POST, previews, functional queries",
+        "cache": false
+      }
+    ]
+  },
+  {
+    "name": "unknown",
+    "rules": [
+      {
+        "description": "BYPASS - admin, sessions, forms POST, previews, functional queries",
+        "cache": false
+      }
+    ]
+  },
+  {
+    "name": "regnum",
+    "rules": [
+      {
+        "description": "BYPASS - admin, sessions, forms POST, previews, functional queries",
+        "cache": false
+      }
+    ]
+  },
+  {
+    "name": "logged",
+    "rules": [
+      {
+        "description": "BYPASS - admin, sessions, forms POST, previews, functional queries",
+        "cache": false
+      }
+    ]
+  },
+  {
+    "name": "password",
+    "rules": [
+      {
+        "description": "BYPASS - admin, sessions, forms POST, previews, functional queries",
+        "cache": false
+      }
+    ]
+  },
+  {
+    "name": "admin",
+    "rules": [
+      {
+        "description": "BYPASS - admin, sessions, forms POST, previews, functional queries",
+        "cache": false
+      }
+    ]
+  },
+  {
+    "name": "rest",
+    "rules": [
+      {
+        "description": "BYPASS - admin, sessions, forms POST, previews, functional queries",
+        "cache": false
+      }
+    ]
+  },
+  {
+    "name": "static",
+    "rules": [
+      {
+        "description": "Public static assets - preserve versioned URLs",
+        "cache": true
+      }
+    ]
+  }
+]

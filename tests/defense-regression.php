@@ -66,8 +66,6 @@ $byzone=[];foreach(array_slice($fixtures,0,2) as $i=>$f){$byzone[$f['zone']]=$f[
 $baseMock=$GLOBALS['defense_mock'];$GLOBALS['defense_mock']=function($url,$args)use($baseMock,$byzone){preg_match('#/zones/([^/]+)/#',$url,$m);$GLOBALS['defense_state']=$byzone[$m[1]];return $baseMock($url,$args);};
 $r=P::install_recommended_hardening_rules_for_enabled_zones(['defense_baseline'=>true]);$again=P::install_recommended_hardening_rules_for_enabled_zones(['defense_baseline'=>true]);
 check($r['success']&&$again['success']&&!$GLOBALS['write_number'],'network repeated verification retains deployed rules');
-mock_zone($fixtures[0]['after']);$GLOBALS['defense_state'][D::CUSTOM]['rules'][0]['enabled']=false;$r=P::install_cache_and_default_security_rules($fixtures[0]['zone']);
-check(!$r['success']&&!$GLOBALS['write_number']&&count($GLOBALS['defense_requests'])===2,'combined install stops before cache changes on defense drift');
 mock_zone(state_with(0));apply_baseline();$GLOBALS['defense_state'][D::CUSTOM]['rules'][1]['action_parameters']['phases'][]='http_request_firewall_managed';$GLOBALS['write_number']=0;$r=apply_baseline();
 check(!$r['success']&&!$GLOBALS['write_number'],'broader WAF skip is rejected as drift');
 mock_zone(state_with(0));apply_baseline();$GLOBALS['defense_state'][D::RATE]['rules'][0]['enabled']=false;$GLOBALS['write_number']=0;$r=apply_baseline();

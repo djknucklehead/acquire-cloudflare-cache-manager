@@ -26,7 +26,7 @@ final class ACFCM_Defense {
     private static function request( $method, $zone, $path, $payload = null ) {
         return Acquire_Cloudflare_Cache_Manager::cloudflare_request( $method, $zone, $path, $payload, 20 );
     }
-    private static function read( $zone ) {
+    public static function read( $zone ) {
         $states = array();
         foreach ( array( self::CUSTOM, self::RATE ) as $phase ) {
             $r = self::request( 'GET', $zone, 'rulesets/phases/' . $phase . '/entrypoint' );
@@ -95,7 +95,7 @@ final class ACFCM_Defense {
         }
         return true;
     }
-    public static function install( $zone, array $options ) {
+    public static function install( $zone, array $options, $reviewed_state = null ) {
         if ( ! preg_match( '/^[a-f0-9]{32}$/', $zone ) ) { return self::result( false, 'A valid Cloudflare Zone ID is required.' ); }
         // One lock per zone across this WordPress installation, including multiple networks.
         $switched = false;
@@ -110,6 +110,7 @@ final class ACFCM_Defense {
         $writes = 0;
         try {
             $state = self::read( $zone );
+            if ( null !== $reviewed_state && ! self::same_state( $reviewed_state, $state ) ) { throw new RuntimeException( 'Security rules changed since the combined preview. Review a fresh security setup; no firewall changes were sent.' ); }
             $plan = self::plan( $zone, $state, $options );
             if ( ! $plan ) { return self::result( true, 'Verified existing policies; no firewall writes. Deployed exceptions and legacy policies are retained, not replaced with new recommendations.' ); }
             // Both phases are preflighted before the first write. Guard precedes new rate rule.

@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.7.1 — 2026-09-18
+
+- Add one-click Install cache rules and Install security rules to each network site's Actions column and to subsite settings. No preview or agreement checkbox is required for installation.
+- Use the standard six-rule public-page cache policy: seven-day eligible public HTML, 24-hour Gravity Forms HTML, supported tracking-query cache sharing, and dynamic/session/private-response bypasses.
+- Automatically back up and replace existing request/response cache rules, including custom exceptions. Install and verify the persistent WordPress guard before Cloudflare writes; retain progress, drift checks, Resume, backup download and rollback.
+- Keep security installation separate and preserve existing security policies. Updating the plugin does not automatically install or replace Cloudflare rules.
+- Add one combined manual cache-clear action: dispatch WP Engine page-cache purging for the selected domain first, then Cloudflare purging for its configured zone in the same request. Preserve bounded retries, cooldowns and accurate failure/pending notices.
+- Improve network and subsite administration with responsive tables, individual-URL refresh, visible maintenance status and recovery controls. Protect active cache-policy settings and validate site/zone permissions.
+- Install the persistent guard using a locked, verified rename without requiring hard links. Pause failed installations for recovery.
+- Version admin assets by content hash so replaced builds cannot reuse stale button scripts.
+- Advance from the manually distributed 3.7.0 candidate to 3.7.1 so candidate installations also receive the updater release.
+
 ## 3.6.0
 
 - Replace destructive hardening-rule description matching with read-only adoption of the verified September 17 defense rollout, including all consolidated blocks and retained policies.

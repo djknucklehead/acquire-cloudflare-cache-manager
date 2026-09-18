@@ -28,5 +28,23 @@ origin_reset();$GLOBALS['responses']=[['code'=>503,'body'=>'{}']];P::purge_urls_
 origin_reset();P::purge_urls_for_current_site(['https://cdn.example.test/image.jpg']);check(!$GLOBALS['origin_calls'],'external attachment host never purges unrelated origin');retry_now();check(count($GLOBALS['calls'])===1,'external attachment still reaches Cloudflare');
 origin_reset();$GLOBALS['home_path']='/subsite';P::purge_zone_everything('zone-1');$regex=$GLOBALS['origin_calls'][0][3]['X-Purge-Path'];check(preg_match('~'.$regex.'~','/subsite/page/')&&preg_match('~'.$regex.'~','/subsite?utm_source=x')&&!preg_match('~'.$regex.'~','/subsite-other/page/')&&!preg_match('~'.$regex.'~','/sibling/'),'subdirectory full purge retains site boundary');unset($GLOBALS['home_path']);
 origin_reset();$GLOBALS['origin_response']=false;P::purge_urls_for_current_site([home_url('/a')]);for($i=0;$i<5;$i++)retry_now();check(count($GLOBALS['origin_calls'])===5&&!$GLOBALS['calls']&&!jobs(),'origin failures exhaust bounded retries without clearing Cloudflare');
+// The combined manual button dispatches both providers without waiting for cron.
+origin_reset();$GLOBALS['during_http']=function(){check(count($GLOBALS['origin_calls'])===1,'combined button sends origin before edge');};
+$r=P::purge_zone_everything('zone-1',true);
+check($r['success']&&count($GLOBALS['origin_calls'])===1&&count($GLOBALS['calls'])===1&&!jobs(),'combined button finishes both dispatches in one request');
+$c=$GLOBALS['calls'][0];$h=$GLOBALS['origin_calls'][0];
+check($h[2]==='site1.test'&&$h[3]['X-Purge-Host']==='^site1\\.test$'&&strpos($c[1],'/zones/zone-1/purge_cache')!==false&&$c[2]===['purge_everything'=>true],'combined button scopes exact origin host and configured Cloudflare zone');
+origin_reset();$GLOBALS['origin_response']=false;$r=P::purge_zone_everything('zone-1',true);
+check(!$GLOBALS['calls']&&!empty($r['queued'])&&!$r['success'],'combined origin failure blocks edge and retains retry');
+origin_reset();$GLOBALS['responses']=[['code'=>503,'body'=>'{}']];$r=P::purge_zone_everything('zone-1',true);
+check(count($GLOBALS['origin_calls'])===1&&count($GLOBALS['calls'])===1&&!empty($r['queued']),'combined edge failure retains retry');
+retry_now();check(count($GLOBALS['origin_calls'])===1&&count($GLOBALS['calls'])===2&&!jobs(),'combined edge retry avoids repeating origin');
+origin_reset();$GLOBALS['responses']=[['code'=>429,'body'=>'{}','retry-after'=>'900']];P::purge_zone_everything('zone-1',true);P::purge_zone_everything('zone-1',true);
+check(count($GLOBALS['calls'])===1&&count($GLOBALS['origin_calls'])===1&&count(jobs())===1,'repeated combined click respects backoff and deduplicates');
+origin_reset();$GLOBALS['during_http']=function(){P::purge_zone_everything('zone-1',true);};$r=P::purge_zone_everything('zone-1',true);
+check(!empty($r['queued'])&&!$r['success']&&count(jobs())===1,'combined in-flight newer generation survives completion');
+retry_now();retry_now();check(count($GLOBALS['origin_calls'])===2&&count($GLOBALS['calls'])===2&&!jobs(),'combined newer generation retries both layers');
+origin_reset();$GLOBALS['home_path']='/subsite';P::purge_zone_everything('zone-1',true);$regex=$GLOBALS['origin_calls'][0][3]['X-Purge-Path'];
+check(preg_match('~'.$regex.'~','/subsite/page/')&&!preg_match('~'.$regex.'~','/sibling/'),'combined action preserves subdirectory boundary');unset($GLOBALS['home_path']);
 origin_reset();define('WPE_DISABLE_CACHE_PURGING',true);$r=P::purge_urls_for_current_site([home_url('/a')]);check(!$GLOBALS['origin_calls']&&!$GLOBALS['calls']&&!empty($r[0]['queued']),'WP Engine purge-disable constant is respected');
 echo "All WP Engine ordering regressions passed.\n";
